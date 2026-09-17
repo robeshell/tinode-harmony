@@ -25,7 +25,7 @@ Tinode 即时通讯协议的 **HarmonyOS NEXT 客户端 SDK**（纯 ArkTS/TypeSc
 | 富文本 Drafty：读侧、写侧（样式/实体/插入删除位移）、渲染片段 | `parseDraftyJson` · `draftyWithStyle` · `draftyInsert` · `draftySegments` | ✅ |
 | 附件：校验 / 分块 / 进度 / 缓存键 / LRU 淘汰 | `validateAttachment` · `planChunks` · `planEviction` | ✅ |
 | 附件：平台 HTTP 上传/下载 | `HarmonyAttachmentHttp` | ⚠️ 未验证成功路径（真机上传回 401，需服务端 `file/u` 授权；失败会退回"仅元数据"并如实提示） |
-| 系统 picker（图片 / 文件） | `examples/harmony` 的 `demo/DemoPickers.ets` | ✅ 真机验证（`PhotoViewPicker` / `DocumentViewPicker` 均能打开） |
+| 系统 picker（图片 / 文件） | `examples/harmony` 的 `demo/DemoPickers.ets` | ✅ 真机验证（选择后复制进沙箱，图片消息**在聊天里渲染缩略图**） |
 | 麦克风录音（按住说话） | `examples/harmony` 的 `DemoVoiceRecorder` + `ohos.permission.MICROPHONE` | ✅ 真机验证（授权弹窗 + 录到 PCM，例：1494 ms / 43520 B） |
 | 入站帧体量守卫 + 字段类型校验 / 出站帧守卫 / 日志脱敏 | `parseServerMessage` · `maxFrameBytes` · `redactTopic` | ✅ |
 | 群组（`grp`） | — | ❌ TODO |

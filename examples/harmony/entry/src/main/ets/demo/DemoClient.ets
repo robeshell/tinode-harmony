@@ -26,7 +26,17 @@ import { TinodeSocket } from '../tinode/Socket.ets';
 import { HarmonyAttachmentHttp } from '../tinode/TinodeAttachmentHttp.ets';
 import { PickedFile, RecordedVoice } from './DemoPickers';
 import { durationTextOf, needsTimeLabel, previewOfKind, sizeTextOf, timeLabelOf } from './DemoFormat';
+
 import type { AttachmentMeta } from '../tinode/Index.ts';
+/** MIME → 社交/Drafty 实体类型（图片 IM / 音频 AU / 视频 VD / 其它 EX）。 */
+function guessKindOf(mime: string): string {
+  const value = mime.toLowerCase();
+  if (value.startsWith('image/')) return 'IM';
+  if (value.startsWith('audio/')) return 'AU';
+  if (value.startsWith('video/')) return 'VD';
+  return 'EX';
+}
+
 
 /** 页面展示用的一条消息（把线路消息 + 富文本片段合在一起）。 */
 export interface DemoMessage {
@@ -46,6 +56,8 @@ export interface DemoMessage {
   fileName: string;
   fileSize: number;
   durationMs: number;
+  /** 图片消息的**本地可渲染路径**（沙箱内）；没有就回落到 `[图片]` 文案。 */
+  imageUri: string;
 }
 
 /** 页面展示用的一个会话。 */
@@ -97,6 +109,8 @@ export class DemoClient {
   private statusByLocalId: Map<string, string> = new Map();
   /** 订阅完成前排队等待发送的动作。 */
   private pendingSends: (() => void)[] = [];
+  /** 附件 ref/缓存键 → 本地沙箱图片路径（发图后聊天里直接渲染缩略图）。 */
+  private imagePathByRef: Map<string, string> = new Map();
 
   constructor(listener: DemoListener) {
     this.listener = listener;
@@ -280,9 +294,20 @@ export class DemoClient {
       ref = cacheKeyOf(file.uri, file.mime);
       this.listener.onUploadProgress(100, bytes === null ? `${file.name}：内容过大未读取，仅发元数据` : `${file.name}：未配置上传地址，仅发本地 ref`);
     }
+    // 图片：记住"ref → 本地沙箱路径"，聊天里直接渲染缩略图（服务端 401 时也能显示自己发的图）
+    const isImage = file.mime.startsWith('image/');
+    if (isImage) this.imagePathByRef.set(ref, file.uri);
     const drafty = attachmentDrafty(
       { name: file.name, mime: file.mime, size: file.size }, { ref: ref, url: url }, file.name);
-    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    const draftyNow = draftySegments(drafty);
+    const localId = `local-${Date.now()}`;
+    this.appendLocalAttachment(localId, this.currentTopic, file.name, draftyNow, guessKindOf(file.mime),
+      file.size, 0, isImage ? file.uri : '');
+    this.whenSubscribed(() => {
+      const frameId = client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+      if (frameId.length > 0) this.pendingPub.set(frameId, localId);
+      else this.markStatus(localId, 'failed');
+    });
     this.listener.onLog(`附件消息已发送 ${file.name}（${file.mime} / ${file.size}B / ref=${ref.slice(0, 12)}…）`);
   }
 
@@ -470,6 +495,27 @@ export class DemoClient {
     return client === null ? [] : client.profiles();
   }
 
+  /**
+   * 服务端回显与本地"发送中"那条是否同一条（用于去重）：类型相同，且文本或附件名一致。
+   * Tinode 的回显报文不一定带 `from`（取决于服务端/会话类型），所以不靠发送者判断。
+   */
+  private looksSameAsLocal(local: DemoMessage, incoming: DemoMessage): boolean {
+    if (local.kind !== incoming.kind) return false;
+    const localLabel = local.fileName.length > 0 ? local.fileName : local.text;
+    const incomingLabel = incoming.fileName.length > 0 ? incoming.fileName : incoming.text;
+    return localLabel.length > 0 && localLabel === incomingLabel;
+  }
+
+  /** 从消息内容里取实体 ref（图片消息用于反查本地沙箱路径）。 */
+  private refOfDrafty(drafty: Drafty | null): string {
+    if (drafty === null || drafty.ent === undefined) return '';
+    for (let i = 0; i < drafty.ent.length; i++) {
+      const data = drafty.ent[i].data;
+      if (data !== undefined && typeof data.ref === 'string') return data.ref;
+    }
+    return '';
+  }
+
   /** 消息变化后刷新会话列表（预览/时间/未读）。 */
   private refreshConversationPreviews(): void {
     const client = this.tinode;
@@ -516,13 +562,16 @@ export class DemoClient {
     const segments = draftySegments(drafty);
     const attachment: AttachmentMeta | null = attachmentOfDrafty(drafty);
     const kind = segments.length > 0 && segments[0].entity !== null ? segments[0].entity.tp : 'text';
+    const ref = attachment === null ? '' : this.refOfDrafty(drafty);
+    const localImage = ref.length > 0 && this.imagePathByRef.has(ref) ? this.imagePathByRef.get(ref) as string : '';
     const item: DemoMessage = {
       id: message.id, topic: message.topic, seq: message.seq, isMine: message.isMine, ts: message.ts,
       text: drafty === null ? '' : drafty.txt, segments: segments, kind: kind,
       showTime: false, timeText: timeLabelOf(message.ts, Date.now()), status: 'sent',
       fileName: attachment === null ? '' : attachment.name,
       fileSize: attachment === null ? 0 : attachment.size,
-      durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration
+      durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration,
+      imageUri: localImage
     };
     let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
@@ -537,6 +586,15 @@ export class DemoClient {
       }
     }
     if (!replaced) bucket.push(item);
+    // 落库回来的"自己发的"消息，把本地那条 seq=-1 的占位删掉（避免同一张图显示两次）
+    if (item.isMine) {
+      for (let i = 0; i < bucket.length; i++) {
+        if (bucket[i].seq === -1 && bucket[i].id !== item.id) {
+          bucket.splice(i, 1);
+          break;
+        }
+      }
+    }
     this.decorate(bucket);
     if (message.topic === this.currentTopic) this.listener.onMessages(bucket.slice());
   }
@@ -553,11 +611,31 @@ export class DemoClient {
     bucket.push({
       id: localId, topic: topic, seq: -1, isMine: true, ts: now, text: text, segments: segments, kind: kind,
       showTime: false, timeText: timeLabelOf(now, now), status: status,
-      fileName: '', fileSize: 0, durationMs: 0
+      fileName: '', fileSize: 0, durationMs: 0, imageUri: ''
     });
     this.statusByLocalId.set(localId, status);
     this.decorate(bucket);
     if (topic === this.currentTopic) this.listener.onMessages(bucket.slice());
+  }
+
+  /** 本地先落一条附件消息（发送中）。 */
+  private appendLocalAttachment(localId: string, topic: string, text: string, segments: DraftySegment[],
+    kind: string, size: number, durationMs: number, imageUri: string): void {
+    let bucket = this.messagesByTopic.get(topic);
+    if (bucket === undefined) {
+      bucket = [];
+      this.messagesByTopic.set(topic, bucket);
+    }
+    const now = Date.now();
+    bucket.push({
+      id: localId, topic: topic, seq: -1, isMine: true, ts: now, text: text, segments: segments, kind: kind,
+      showTime: false, timeText: timeLabelOf(now, now), status: 'sending',
+      fileName: kind === 'EX' ? text : '', fileSize: size, durationMs: durationMs, imageUri: imageUri
+    });
+    this.statusByLocalId.set(localId, 'sending');
+    this.decorate(bucket);
+    if (topic === this.currentTopic) this.listener.onMessages(bucket.slice());
+    this.refreshConversationPreviews();
   }
 
   /** 更新某条本地消息的送达状态。 */
@@ -620,6 +698,10 @@ export class DemoClient {
     if (drafty !== null) text = drafty.txt;
     const attachment: AttachmentMeta | null = attachmentOfDrafty(drafty);
     const receivedKind = segments.length > 0 && segments[0].entity !== null ? segments[0].entity.tp : 'text';
+    // 自己发的图片会被服务端**回显**成 data 报文：这里用实体 ref 反查本地沙箱副本，才能显示缩略图
+    const receivedRef = this.refOfDrafty(drafty);
+    const receivedLocalImage = receivedRef.length > 0 && this.imagePathByRef.has(receivedRef)
+      ? this.imagePathByRef.get(receivedRef) as string : '';
     const message: DemoMessage = {
       id: `${data.topic}-${data.seq}`,
       topic: data.topic,
@@ -632,12 +714,36 @@ export class DemoClient {
       showTime: false, timeText: timeLabelOf(Date.now(), Date.now()), status: 'delivered',
       fileName: attachment === null ? '' : attachment.name,
       fileSize: attachment === null ? 0 : attachment.size,
-      durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration
+      durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration,
+      imageUri: receivedLocalImage
     };
-    let bucket = this.messagesByTopic.get(data.topic);
+    let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
       bucket = [];
-      this.messagesByTopic.set(data.topic, bucket);
+      this.messagesByTopic.set(message.topic, bucket);
+    }
+    // 自己发出去的消息会被服务端回显：把本地那条"发送中"的替换掉（保留本地图片副本与富文本片段，
+    // 因为服务端可能裁剪实体里的 ref 等自定义字段）。
+    let replacedLocal = false;
+    {
+      for (let i = 0; i < bucket.length; i++) {
+        if (bucket[i].seq === -1 && bucket[i].isMine && this.looksSameAsLocal(bucket[i], message)) {
+          const previous = bucket[i];
+          message.imageUri = message.imageUri.length > 0 ? message.imageUri : previous.imageUri;
+          if (message.segments.length === 0) message.segments = previous.segments;
+          if (message.text.length === 0) message.text = previous.text;
+          message.kind = previous.kind;
+          message.fileName = message.fileName.length > 0 ? message.fileName : previous.fileName;
+          message.fileSize = message.fileSize > 0 ? message.fileSize : previous.fileSize;
+          message.durationMs = message.durationMs > 0 ? message.durationMs : previous.durationMs;
+          message.ts = previous.ts;                       // 保持本地发送时间，避免时间标签跳动
+          message.status = 'sent';
+          this.statusByLocalId.set(previous.id, 'sent');
+          bucket.splice(i, 1);
+          replacedLocal = true;
+          break;
+        }
+      }
     }
     bucket.push(message);
     this.decorate(bucket);

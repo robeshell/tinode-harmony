@@ -86,27 +86,50 @@ export function readUriBytes(uri: string, maxBytes: number): Uint8Array | null {
   }
 }
 
-/** 选图片（系统图库 picker）。用户取消时抛错，调用方 catch 后忽略即可。 */
-export async function pickImage(): Promise<PickedFile> {
+/**
+ * 把 picker 返回的 URI **复制进应用沙箱**：picker 给的授权是临时的（进程重启/后续读取会失败），
+ * 复制到 `cacheDir` 之后既能稳定渲染缩略图，也能作为附件上传的来源。
+ */
+export function copyIntoCache(context: common.UIAbilityContext, uri: string, name: string): string {
+  if (uri.length === 0) return '';
+  try {
+    const dir = `${context.cacheDir}/picked`;
+    if (!fileIo.accessSync(dir)) fileIo.mkdirSync(dir, true);
+    const target = `${dir}/${Date.now()}-${name}`;
+    const source = fileIo.openSync(uri, fileIo.OpenMode.READ_ONLY);
+    const dest = fileIo.openSync(target, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+    fileIo.copyFileSync(source.fd, dest.fd);
+    fileIo.closeSync(source);
+    fileIo.closeSync(dest);
+    return target;
+  } catch (error) {
+    return uri;                     // 复制失败就退回原 URI（可能仍能渲染，也可能失败 → 界面回落文案）
+  }
+}
+
+/** 选图片（系统图库 picker）；返回的 `uri` 已是**沙箱内**路径，可直接 `Image('file://'+uri)` 渲染。 */
+export async function pickImage(context: common.UIAbilityContext): Promise<PickedFile> {
   const options = new photoAccessHelper.PhotoSelectOptions();
   options.MIMEType = photoAccessHelper.PhotoViewMIMETypes.IMAGE_TYPE;
   options.maxSelectNumber = 1;
   const pickerView = new photoAccessHelper.PhotoViewPicker();
   const result = await pickerView.select(options);
-  const uri = result.photoUris.length > 0 ? result.photoUris[0] : '';
-  const name = fileNameOfUri(uri);
-  return { uri: uri, name: name, mime: mimeOfName(name), size: sizeOfUri(uri) };
+  const source = result.photoUris.length > 0 ? result.photoUris[0] : '';
+  const name = fileNameOfUri(source);
+  const local = copyIntoCache(context, source, name);
+  return { uri: local, name: name, mime: mimeOfName(name), size: sizeOfUri(local) };
 }
 
-/** 选文件（系统文件 picker）。 */
-export async function pickDocument(): Promise<PickedFile> {
+/** 选文件（系统文件 picker）；同样复制进沙箱，便于后续上传/预览。 */
+export async function pickDocument(context: common.UIAbilityContext): Promise<PickedFile> {
   const options = new picker.DocumentSelectOptions();
   options.maxSelectNumber = 1;
   const documentPicker = new picker.DocumentViewPicker();
   const uris = await documentPicker.select(options);
-  const uri = uris.length > 0 ? uris[0] : '';
-  const name = fileNameOfUri(uri);
-  return { uri: uri, name: name, mime: mimeOfName(name), size: sizeOfUri(uri) };
+  const source = uris.length > 0 ? uris[0] : '';
+  const name = fileNameOfUri(source);
+  const local = copyIntoCache(context, source, name);
+  return { uri: local, name: name, mime: mimeOfName(name), size: sizeOfUri(local) };
 }
 
 /** 申请麦克风权限（首次弹系统框）。 */

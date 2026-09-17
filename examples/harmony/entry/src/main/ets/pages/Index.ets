@@ -185,21 +185,23 @@ struct Index {
   }
 
   private pickAndSendImage(): void {
-    pickImage().then((file: PickedFile) => {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    pickImage(context).then((file: PickedFile) => {
       this.uploadNote = `已选图 ${file.name}（${sizeTextOf(file.size)}）`;
       const client = this.clientOrNull();
       if (client !== null) return client.sendPickedFile(file, readUriBytes(file.uri, 8 * 1024 * 1024));
       return undefined;
-    }).catch(() => { this.uploadNote = '已取消选择图片'; });
+    }).catch((error: Object) => { this.uploadNote = `选图失败：${String(error)}`; });
   }
 
   private pickAndSendDocument(): void {
-    pickDocument().then((file: PickedFile) => {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    pickDocument(context).then((file: PickedFile) => {
       this.uploadNote = `已选文件 ${file.name}（${sizeTextOf(file.size)}）`;
       const client = this.clientOrNull();
       if (client !== null) return client.sendPickedFile(file, readUriBytes(file.uri, 8 * 1024 * 1024));
       return undefined;
-    }).catch(() => { this.uploadNote = '已取消选择文件'; });
+    }).catch((error: Object) => { this.uploadNote = `选文件失败：${String(error)}`; });
   }
 
   private startRecording(): void {
@@ -491,11 +493,29 @@ struct Index {
   messageContent(item: DemoMessage) {
     Column({ space: 4 }) {
       if (item.kind === 'IM' || item.kind === 'VD') {
-        Row({ space: 8 }) {
-          Text('[图片]').fontSize(13).fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
-          Text(item.text.length > 0 ? item.text : item.fileName).fontSize(14)
-            .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
-        }
+        Column({ space: 4 }) {
+          if (item.imageUri.length > 0) {
+            // 本地沙箱里的图片直接渲染缩略图（picker 选中的图已复制进 cacheDir）
+            Image(`file://${item.imageUri}`)
+              .width(200)
+              .height(item.kind === 'VD' ? 112 : 150)
+              .objectFit(ImageFit.Cover)
+              .borderRadius(8)
+              .alt($r('app.media.app_icon'))
+          } else {
+            Row({ space: 8 }) {
+              Text(item.kind === 'VD' ? '[视频]' : '[图片]').fontSize(13)
+                .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
+              Text('对端图片：本地无副本，未上传成功时无法显示')
+                .fontSize(12).fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
+                .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+            }
+          }
+          if (item.text.length > 0) {
+            Text(item.text).fontSize(12).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+              .fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
+          }
+        }.alignItems(HorizontalAlign.Start)
       } else if (item.kind === 'EX') {
         Row({ space: 10 }) {
           Text('📄').fontSize(22)
@@ -695,6 +715,13 @@ struct Index {
       }
       .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 })
       .backgroundColor(Color.White).border({ width: { top: 0.5 }, color: DemoTheme.divider })
+
+      if (this.uploadNote.length > 0) {
+        Text(`${this.uploadNote}${this.uploadPercent > 0 && this.uploadPercent < 100 ? `（${this.uploadPercent}%）` : ''}`)
+          .fontSize(11).fontColor(DemoTheme.textHint)
+          .width('100%').padding({ left: 16, right: 16, bottom: 6 })
+          .backgroundColor(Color.White)
+      }
     }
     .width('100%').height('100%').backgroundColor(DemoTheme.pageBackground)
   }
