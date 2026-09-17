@@ -27,7 +27,8 @@
 import {
   IM_PROBE_PAYLOAD,
   backoffDelayMs, buildDelMessages, buildDelTopic, buildGetHistory, buildHi, buildLeave, buildLogin,
-  buildGetHistorySince, buildNoteKeyPress, buildNoteRead, buildPub, buildSub, ctrlFailureText, ctrlIsFatal, ctrlOk,
+  accFailureText, buildAccCreate, buildGetHistorySince, buildNoteKeyPress, buildNoteRead, buildPub, buildSub,
+  ctrlFailureText, ctrlIsFatal, ctrlOk,
   parseServerMessage, parseWsEndpoint
 } from './TinodeWire.ts';
 import type {
@@ -62,6 +63,12 @@ export interface ImTransport {
 }
 
 /** 会话配置（全部来自后端 `im/token` 响应或应用信息）。 */
+/** 服务端签发的账号凭据（P3-min）：`uid` 为 Tinode 用户 id，`token` 用于下次登录（本端不落盘）。 */
+export interface TinodeAuth {
+  uid: string;
+  token: string;
+}
+
 /** 判定"连接稳定"的窗口（毫秒）：撑过它再断线才算新问题，退避计数清零（审计 P1-1）。 */
 export const STABLE_CONNECTION_MS = 5000;
 
@@ -72,7 +79,9 @@ export interface ImSessionConfig {
   token: string;
   /**
    * 登录 scheme：`token`（默认，token 作为 secret）、`basic`（token 里放 `user:password`）、
-   * `anonymous`（公开服务自测；此时 `token` 可以为空）。
+   * `anonymous`（公开服务自测；此时 `token` 可以为空）、
+   * **`none`（P3-min：连上握手后**不发 login**，停在"可发请求但未认证"的就绪态 ——
+   * 注册流程用它先发 `acc{user:"new", login:true}` 注册并登录）**。
    */
   loginScheme?: string;
   userAgent: string;
@@ -139,6 +148,8 @@ export interface ImSessionHooks {
   onServerVersion: (ver: string, build: string) => void;
   /** 主题状态变化（订阅结果 / 位点推进）。**可选**：不关心就不实现。 */
   onTopicState?: (state: TinodeTopicState) => void;
+  /** 服务端签发/更新凭据（登录或注册成功；P3-min）。**可选**。 */
+  onAuth?: (auth: TinodeAuth) => void;
 }
 
 /**
@@ -166,6 +177,8 @@ export class ImSession {
   private topics: TinodeTopics = new TinodeTopics();
   /** 在途的订阅请求：报文 id → topic（收到 ctrl 后据此标记订阅成功/失败）。 */
   private subRequests: Map<string, string> = new Map();
+  /** 在途的注册请求（P3-min）：报文 id 集合（收到 ctrl 后完成登录）。 */
+  private accRequests: Set<string> = new Set();
   private retryAtMs: number = 0;
   private deadlineMs: number = 0;
   private lastProbeMs: number = 0;
@@ -229,7 +242,7 @@ export class ImSession {
       return;
     }
     const scheme = this.config.loginScheme === undefined ? 'token' : this.config.loginScheme;
-    if (scheme !== 'anonymous' && this.config.token.length === 0) {
+    if (scheme !== 'anonymous' && scheme !== 'none' && this.config.token.length === 0) {
       this.endpoint = null;
       this.setState('failed');
       this.fail('缺少消息服务凭据，请重新登录后再试');
@@ -407,11 +420,22 @@ export class ImSession {
           params.ver === undefined ? '' : params.ver,
           params.build === undefined ? '' : params.build);
       }
+      const scheme = this.config.loginScheme === undefined ? 'token' : this.config.loginScheme;
+      if (scheme === 'none') {
+        // P3-min：不发 login，直接进入就绪态（未认证），宿主用 `createAccount` 发 `acc` 注册并登录。
+        this.currentUid = '';
+        this.retryAtMs = 0;
+        this.lastProbeMs = nowMs;
+        this.readyAtMs = nowMs;
+        this.failureHandled = false;
+        this.setState('ready');
+        this.resubscribeAll();
+        return;
+      }
       // hi 应答成功 → 发 login（SDK 在 onConnect 里紧接着 login）。
       this.setState('login');
       this.deadlineMs = nowMs + this.config.loginTimeoutMs;
-      this.transport.send(buildLogin(this.takeId(), this.config.token,
-        this.config.loginScheme === undefined ? 'token' : this.config.loginScheme));
+      this.transport.send(buildLogin(this.takeId(), this.config.token, scheme));
       return;
     }
     if (this.currentState === 'login') {
@@ -435,8 +459,26 @@ export class ImSession {
       this.readyAtMs = nowMs;
       this.failureHandled = false;
       this.setState('ready');
+      // P3-min：把服务端签发的 token 交给宿主（本端不落盘）。
+      const issued = params === undefined || params.token === undefined ? '' : params.token;
+      this.emitAuth(uid, issued);
       // P1：连上并登录后自动把登记过的主题重新订回来（可关），需要时从 lastSeq 补历史。
       this.resubscribeAll();
+      return;
+    }
+    // 注册应答（P3-min）：`acc` 成功即完成登录（服务端回 user + token）。
+    const accId = ctrl.id === undefined ? '' : ctrl.id;
+    if (this.accRequests.has(accId)) {
+      this.accRequests.delete(accId);
+      if (!ctrlOk(ctrl.code)) {
+        this.fail(accFailureText(ctrl.code, ctrl.text === undefined ? '' : ctrl.text));
+        return;
+      }
+      const accParams = ctrl.params;
+      const accUid = accParams === undefined || accParams.user === undefined ? '' : accParams.user;
+      if (accUid.length > 0) this.currentUid = accUid;
+      const accToken = accParams === undefined || accParams.token === undefined ? '' : accParams.token;
+      this.emitAuth(accUid, accToken);
       return;
     }
     // 订阅应答：按报文 id 归因，标记该主题订阅成功/失败（P1）。
@@ -570,6 +612,36 @@ export class ImSession {
    * note 类报文（`read`/`kp`）的统一出口。**协议里 note 没有 id**，所以这类方法统一返回
    * `boolean`（是否已发出），而不是像 `publish` 那样返回报文 id —— 这是审计 P1-8 的统一口径。
    */
+  /**
+   * 注册账号并直接登录（P3-min）：`acc{user:"new", login:true, scheme, secret, desc.public.fn}`。
+   * 需要连接处于就绪态（`loginScheme:'none'` 时连上即可；已认证的连接也能发，用于同账号加凭据）。
+   * 返回报文 id；结果通过 `hooks.onAuth(uid, token)` / `hooks.onFailure(text)` 回来。
+   */
+  createAccount(scheme: string, secret: string, fn: string): string {
+    if (this.currentState !== 'ready') return '';
+    const id = this.takeId();
+    this.accRequests.add(id);
+    this.transport.send(buildAccCreate(id, scheme, secret, fn, true));
+    return id;
+  }
+
+  /** 切换登录 scheme（P3-min：`'basic'` 配合 `setToken('user:password')` 做密码登录）。 */
+  setLoginScheme(scheme: string): void {
+    this.config.loginScheme = scheme;
+  }
+
+  /** 设置登录 token（`basic` 时是 `用户名:密码`）。 */
+  setToken(token: string): void {
+    this.config.token = token;
+  }
+
+  /** 服务端签发凭据时回调宿主（P3-min：注册/登录成功后拿 token）。 */
+  private emitAuth(uid: string, token: string): void {
+    const emit = this.hooks.onAuth;
+    if (emit === undefined || (uid.length === 0 && token.length === 0)) return;
+    emit({ uid: uid, token: token });
+  }
+
   /** 开关：连上后自动重订阅（默认开）。 */
   setAutoResubscribe(enabled: boolean): void {
     this.config.autoResubscribe = enabled;

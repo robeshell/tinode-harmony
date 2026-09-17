@@ -139,6 +139,47 @@ export function buildGetHistory(id: string, topic: string, before: number, limit
   });
 }
 
+/** `acc` 请求体（`MsgClientAcc`）：创建账号（`user:"new"`）并可选直接登录（`login:true`）。 */
+export interface ImAccBody {
+  id: string;
+  user: string;
+  login?: boolean;
+  scheme?: string;
+  secret?: string;
+  desc?: ImAccDesc;
+}
+
+/** `acc.desc` 里本端只用 `public`（公开名片）。 */
+export interface ImAccDesc {
+  public?: ImCard;
+}
+
+/**
+ * `acc{user:"new", login:true, scheme, secret, desc:{public:{fn}}}`：**注册账号并直接登录**（P3-min）。
+ * `basic` 方案的 `secret` 是 `用户名:密码`；`anonymous` 不需要 secret。
+ * 服务端应答的 `ctrl.params` 里带 `user` 与新签发的 `token`（会话据此完成登录并回调 `onAuth`）。
+ */
+export function buildAccCreate(id: string, scheme: string, secret: string, fn: string,
+  login: boolean = true): string {
+  const body: ImAccBody = { id: id, user: 'new', login: login, scheme: scheme };
+  if (scheme !== 'anonymous') body.secret = secret;
+  const card: ImCard = {};
+  if (fn.trim().length > 0) card.fn = fn.trim();
+  body.desc = { public: card };
+  return JSON.stringify({ acc: body });
+}
+
+/**
+ * `acc` 失败的专用文案（P3-min）：409 在 `acc` 语境下是"用户名已存在/冲突"，
+ * 与 topic 冲突的含义不同；其余码回落到通用文案。
+ */
+export function accFailureText(code: number, serverText: string): string {
+  if (hasChinese(serverText)) return serverText;
+  if (code === IM_CODE_CONFLICT) return '用户名已被占用，请换一个再试';
+  if (code === IM_CODE_BAD_REQUEST) return '用户名或密码不符合要求（长度/字符限制）';
+  return ctrlFailureText(code, serverText);
+}
+
 /**
  * `get{what:"data", data:{since, limit}}`：从某个位点**向后**补历史（断线重连用）。
  * 与 `buildGetHistory`（`before`）二选一：前者补缺口，后者翻旧账。

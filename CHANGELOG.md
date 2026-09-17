@@ -4,6 +4,15 @@
 
 ## [Unreleased]
 
+### 账号自举（P3-min）
+- `TinodeWire`：`buildAccCreate(id, scheme, secret, fn, login=true)`（`acc{user:"new", login:true, scheme, secret, desc:{public:{fn}}}`）
+  与 `accFailureText`（409 → 用户名已被占用、400 → 用户名/密码不符合要求）；
+- `ImSessionConfig.loginScheme` 新增 **`'none'`**：握手后**不发 login**，直接进入就绪态（未认证），供注册流程使用；
+  新增 `ImSession.createAccount(scheme, secret, fn)` / `setLoginScheme` / `setToken`，以及可选 hook **`onAuth({uid, token})`**（登录或注册成功时回调）；
+- 门面：`registerAccount(user, password, fn?): Promise<TinodeAuth>`（就绪后发 `acc` 并等待 ctrl）、
+  `configurePasswordLogin(user, password)`（`start()` 之前切 `basic` 方案）、`configureTokenLogin(token)`；
+- 效果：**第三方不写后端也能注册账号并登录**（Tinode 服务端直接可用）。
+
 ### 会话与资料自举（P5-min）
 - 新增 `src/TinodeMeta.ts`（纯逻辑）：`profileFromSub` / `profilesFromMeta`（`meta.sub[]` → `TinodeProfile`：
   名字/头像/`seq`/`read`/`recv`/`online`/最后活动）、`mergeProfiles`（非空字段优先 + 位点取最大 + 时间取最新）、

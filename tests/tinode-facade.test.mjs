@@ -286,3 +286,69 @@ test('P5-min：meta.sub 变会话列表（落库 + onTopics），ready 时自动
   assert.equal(facade.profileOf('usrA').seq, 20);
   assert.equal(facade.profiles().length, 2, '没有把 usrB 弄丢');
 });
+
+// P3-min：loginScheme='none' 不发 login；registerAccount 走 acc 并拿回 {uid, token}
+test('P3-min：注册账号（acc user:"new"）成功后拿回 uid/token', async () => {
+  const { Tinode } = await import('../src/Tinode.ts');
+  const { MemoryTinodeStorage } = await import('../src/TinodeStorage.ts');
+  const { defaultSessionConfig } = await import('../src/TinodeSession.ts');
+
+  const sent = [];
+  let handlers = null;
+  const transport = { open: (h) => { handlers = h; }, send: (t) => sent.push(t), close: () => { handlers = null; } };
+  const config = defaultSessionConfig('wss://im.example.com:6061/v0/channels', '', 'App/1.0', '');
+  config.loginScheme = 'none';                       // 注册流程：不需要 token
+  const authSeen = [];
+  const facade = new Tinode({ transport, config, storage: new MemoryTinodeStorage(), hooks: { onAuth: (a) => authSeen.push(a) } });
+
+  facade.start(0);
+  handlers.onOpen(10);
+  handlers.onMessage(JSON.stringify({ ctrl: { id: '1', code: 200, params: { ver: '0.25' } } }), 20);
+  assert.equal(facade.state(), 'ready', 'none 模式：握手完就就绪');
+  const frames = sent.map((f) => JSON.parse(f));
+  assert.equal(frames.filter((f) => f.login !== undefined).length, 0, '不发 login');
+
+  // 注册（异步）
+  const pending = facade.registerAccount('alice', 'pw123456', '爱丽丝');
+  const accFrame = sent.map((f) => JSON.parse(f)).find((f) => f.acc !== undefined);
+  assert.ok(accFrame, '发出 acc');
+  assert.equal(accFrame.acc.user, 'new');
+  assert.equal(accFrame.acc.login, true);
+  assert.equal(accFrame.acc.scheme, 'basic');
+  assert.equal(accFrame.acc.secret, 'alice:pw123456');
+  assert.equal(accFrame.acc.desc.public.fn, '爱丽丝');
+
+  handlers.onMessage(JSON.stringify({ ctrl: { id: accFrame.acc.id, code: 200, params: { user: 'usrAlice', token: 'tk-1' } } }), 30);
+  const auth = await pending;
+  assert.deepEqual(auth, { uid: 'usrAlice', token: 'tk-1' });
+  assert.equal(facade.myUid(), 'usrAlice');
+  assert.equal(authSeen.length, 1, 'onAuth 回调一次');
+
+  // 失败路径：用户名冲突
+  const failing = facade.registerAccount('alice', 'pw123456');
+  const second = sent.map((f) => JSON.parse(f)).filter((f) => f.acc !== undefined).pop();
+  handlers.onMessage(JSON.stringify({ ctrl: { id: second.acc.id, code: 409, text: 'conflict' } }), 40);
+  await assert.rejects(() => failing, /用户名已被占用/);
+
+  // 参数校验
+  await assert.rejects(() => facade.registerAccount('  ', 'pw123456'), /用户名不能为空/);
+  await assert.rejects(() => facade.registerAccount('bob', '123'), /密码至少 6 位/);
+});
+
+test('P3-min：configurePasswordLogin 在 start 之前切换 basic scheme', async () => {
+  const { Tinode } = await import('../src/Tinode.ts');
+  const { MemoryTinodeStorage } = await import('../src/TinodeStorage.ts');
+  const { defaultSessionConfig } = await import('../src/TinodeSession.ts');
+  const sent = [];
+  let handlers = null;
+  const transport = { open: (h) => { handlers = h; }, send: (t) => sent.push(t), close: () => { handlers = null; } };
+  const config = defaultSessionConfig('wss://im.example.com:6061/v0/channels', '', 'App/1.0', '');
+  const facade = new Tinode({ transport, config, storage: new MemoryTinodeStorage(), hooks: {} });
+  facade.configurePasswordLogin('alice', 'pw123456');
+  facade.start(0);
+  handlers.onOpen(10);
+  handlers.onMessage(JSON.stringify({ ctrl: { id: '1', code: 200, params: { ver: '0.25' } } }), 20);
+  const login = sent.map((f) => JSON.parse(f)).find((f) => f.login !== undefined);
+  assert.equal(login.login.scheme, 'basic');
+  assert.equal(login.login.secret, 'alice:pw123456');
+});

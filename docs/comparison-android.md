@@ -106,7 +106,7 @@
 | --- | --- | --- |
 | P1 | ✅ **已完成**（2026-09-17）：`TinodeTopics` + 自动重订阅 + `since` 补历史 + `knownTopics/topicState/onTopicState`，可关 | 已交付 |
 | P2 | ✅ **已完成（可选模块）**：纯逻辑 `TinodeAttachment.ts`（校验/分块/进度/缓存/LRU/Drafty 互转）+ 平台 `TinodeAttachmentHttp.ets`（**未真机验证**）；断点续传/秒传/转码仍缺 | 已交付 |
-| P3 | **账号与凭据**（`acc`/`login` 全 scheme、`Credential`/`AuthScheme`） | 中（1 批） |
+| P3 | 🟡 **P3-min 已完成**（2026-09-17）：`acc{user:"new"}` 注册 + `login`（token/basic/anonymous/none）+ `onAuth(uid, token)`；`Credential`/`AuthScheme` 的多凭据管理与 `acc` 更新面仍缺 | 部分交付 |
 | P4 | ✅ **已完成（策略 + 装饰器）**：`TinodeStore.ts`（去重合并/未读/摘要/淘汰/草稿预览）+ `CachedTinodeStorage`（LRU 读缓存，写操作失效）；RDB/文件实现仍由宿主提供 | 已交付 |
 | P5 | 🟡 **P5-min 已完成**（2026-09-17）：`meta.sub[]` → `TinodeProfile`（名字/头像/位点/在线/最后活动）+ `me` 自动订阅 + `onTopics`/`profileOf()` + 显示名三级兜底；`fnd` 搜人、`Acs`/`Defacs` 权限模型仍缺 | 部分交付 |
 | P6 | **Drafty 写侧 + `fmt`**（含与安卓的偏移语义对齐） | 中（1 批） |

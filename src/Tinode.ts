@@ -19,6 +19,7 @@ import type { Drafty } from './Drafty.ts';
 import type { TinodeTopicState } from './TinodeTopics.ts';
 import { mergeProfiles, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
 import type { TinodeProfile } from './TinodeMeta.ts';
+import type { TinodeAuth } from './TinodeSession.ts';
 import { ImSession, defaultSessionConfig } from './TinodeSession.ts';
 import type { ImSessionConfig, ImSessionState, ImTransport } from './TinodeSession.ts';
 import type { ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, DelRange } from './TinodeWire.ts';
@@ -61,6 +62,8 @@ export interface TinodeHooks {
   onTopicState?: (state: TinodeTopicState) => void;
   /** 会话列表刷新（P5-min：收到 `meta` 合并后回调，可直接渲染列表）。 */
   onTopics?: (topics: TinodeTopic[]) => void;
+  /** 服务端签发凭据（登录/注册成功；P3-min）——宿主自行安全保存 `token`。 */
+  onAuth?: (auth: TinodeAuth) => void;
 }
 
 /** 构造门面的参数。 */
@@ -110,6 +113,9 @@ export class Tinode {
   /** 最近一次落库的会话模型（保留 `lastPreview` 等宿主维护的字段）。 */
   private topicsByTopic: Map<string, TinodeTopic> = new Map();
   private meSubscribed: boolean = false;
+  /** P3-min：注册/登录等待中的 Promise 回调（一次一个，够用且简单）。 */
+  private pendingAuth: ((auth: TinodeAuth) => void) | null = null;
+  private pendingAuthReject: ((reason: string) => void) | null = null;
 
   constructor(options: TinodeOptions) {
     this.hooks = options.hooks === undefined ? {} : options.hooks;
@@ -155,6 +161,12 @@ export class Tinode {
         if (done !== undefined) done(ctrl);
       },
       onFailure: (text: string) => {
+        const reject = this.pendingAuthReject;
+        if (reject !== null) {
+          this.pendingAuth = null;
+          this.pendingAuthReject = null;
+          reject(text);
+        }
         const done = this.hooks.onFailure;
         if (done !== undefined) done(text);
       },
@@ -162,6 +174,16 @@ export class Tinode {
         tinodeLogDetail('tinode', `server ${version}`, 'info');
         const done = this.hooks.onServerVersion;
         if (done !== undefined) done(version);
+      },
+      onAuth: (auth: TinodeAuth) => {
+        const resolve = this.pendingAuth;
+        if (resolve !== null) {
+          this.pendingAuth = null;
+          this.pendingAuthReject = null;
+          resolve(auth);
+        }
+        const done = this.hooks.onAuth;
+        if (done !== undefined) done(auth);
       },
       onTopicState: options.hooks === undefined || options.hooks.onTopicState === undefined
         ? undefined : (state: TinodeTopicState) => {
@@ -217,6 +239,51 @@ export class Tinode {
     const sorted = sortTopicsByActivity(topics);
     const done = this.hooks.onTopics;
     if (done !== undefined) done(sorted);
+  }
+
+  /**
+   * P3-min：**注册账号并登录**（`acc{user:"new", login:true}`）。
+   *
+   * 前置：连接处于就绪态 —— 用 `loginScheme: 'none'` 构造（不要求 token），`start()` 后等 `state() === 'ready'`。
+   * 成功返回服务端签发的 `{uid, token}`（**请自行安全保存**；SDK 不落盘）；失败 reject 一条用户可读文案。
+   *
+   * ```ts
+   * const auth = await tinode.registerAccount('alice', 'pw123456', '爱丽丝');
+   * // 下次直接用 token 登录：config.token = auth.token, loginScheme = 'token'
+   * ```
+   */
+  registerAccount(user: string, password: string, fn: string = ''): Promise<TinodeAuth> {
+    const name = user.trim();
+    if (name.length === 0) return Promise.reject('用户名不能为空');
+    if (password.length < 6) return Promise.reject('密码至少 6 位');
+    if (this.session.state() !== 'ready') {
+      return Promise.reject('连接尚未就绪：请用 loginScheme 设为 none 启动，等 state() 变成 ready 后再注册');
+    }
+    return new Promise<TinodeAuth>((resolve: (auth: TinodeAuth) => void, reject: (reason: string) => void) => {
+      this.pendingAuth = resolve;
+      this.pendingAuthReject = reject;
+      const id = this.session.createAccount('basic', `${name}:${password}`, fn);
+      if (id.length === 0) {
+        this.pendingAuth = null;
+        this.pendingAuthReject = null;
+        reject('注册请求未发出：连接未就绪');
+      }
+    });
+  }
+
+  /**
+   * P3-min：改成**用户名密码登录**（`basic` scheme）。必须在 `start()` **之前**调用。
+   * 想先注册再登录的流程：用 `loginScheme:'none'` → `registerAccount()` → 拿 token 后下次用 `token` 登录。
+   */
+  configurePasswordLogin(user: string, password: string): void {
+    this.session.setLoginScheme('basic');
+    this.session.setToken(`${user.trim()}:${password}`);
+  }
+
+  /** 重新配置登录凭据（换号/重新登录时用；下一次 `start()` 生效）。 */
+  configureTokenLogin(token: string): void {
+    this.session.setLoginScheme('token');
+    this.session.setToken(token);
   }
 
   /** P5-min：当前已知的会话列表（按最后活动倒序；未收到 `meta` 前为空）。 */

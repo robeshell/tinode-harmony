@@ -16,6 +16,8 @@
 | `deleteTopic(topic)` / `deleteMessages(topic, ranges, hard)` | 报文 id / `''` | — |
 | `setRead(topic, seq)` / `setTyping(topic)` / `leave(topic)` | **`boolean`（是否已发出）** | note/leave 协议里没有 id，故不进 id 口径 |
 | `knownTopics()` / `topicState(topic)` | `TinodeTopicState[]` / `TinodeTopicState \| null` | **P1**：订阅意图 + 位点（`lastSeq`/`read`/`recv`）快照 |
+| `registerAccount(user, password, fn?)` | `Promise<TinodeAuth>` | **P3-min**：`acc{user:"new", login:true}` 注册并登录（需 `loginScheme:'none'` 且已 ready） |
+| `configurePasswordLogin(user, password)` / `configureTokenLogin(token)` | `void` | **P3-min**：`start()` 之前切换登录方案 |
 | `profiles()` / `profileOf(topic)` | `TinodeProfile[]` / `TinodeProfile \| null` | **P5-min**：会话轮廓（名字/头像/位点/在线/最后活动） |
 | `rememberTopic(topic)` | `void` | 把宿主自己维护的 `TinodeTopic`（含 `lastPreview`）同步进门面 |
 | `conversations()` / `messagesOf(topic, limit, beforeSeq)` / `draftOf(topic)` | `Promise<…>` | 存储端口包装 |
@@ -52,6 +54,16 @@
 | `cacheKeyOf` / `cacheBytesOf` / `planEviction` | 缓存键与 LRU 淘汰规划 |
 | `attachmentUploadUrl(serverBase)` / `uploadedRefOf(body)` | Tinode 上传地址与响应解析 |
 | `HarmonyAttachmentHttp`（`Socket.ets` 出口） | 平台 HTTP 上传/下载（**未真机验证**） |
+
+## 账号（P3-min）
+
+| 入口 | 说明 |
+| --- | --- |
+| `buildAccCreate(id, scheme, secret, fn, login?)` | `acc` 报文（`user:"new"` 创建；`basic` 的 `secret` 是 `用户名:密码`） |
+| `accFailureText(code, text)` | `acc` 专用错误文案（409 用户名占用、400 用户名/密码不合规） |
+| `ImSession.createAccount(scheme, secret, fn)` | 会话层发 `acc`，结果走 `onAuth`/`onFailure` |
+| `Tinode.registerAccount(user, password, fn?)` | 门面 Promise 版：`{uid, token}` |
+| `loginScheme: 'none'` | 握手后不发 `login`（注册/未认证场景） |
 
 ## 会话与资料（`TinodeMeta.ts`，P5-min）
 
