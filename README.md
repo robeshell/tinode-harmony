@@ -26,6 +26,7 @@ tinode.publish('usrXXXXXX', { txt: 'hi' });
 | 分层、状态机、三个端口、两种门面模式 | [docs/architecture.md](./docs/architecture.md) |
 | 凭据怎么处理、**为什么不要提交真实地址与密钥** | [docs/security.md](./docs/security.md) |
 | 连不上/403/UID mismatch/退避/脱敏 等排错 | [docs/troubleshooting.md](./docs/troubleshooting.md) |
+| 和 Android 版（官方 Java SDK）的功能/架构对比、以及差距补齐路线 | [docs/comparison-android.md](./docs/comparison-android.md) |
 | **示例 app**：DevEco 可直接构建（连接→订阅→发消息） | [`examples/harmony/`](./examples/harmony/README.md) |
 | **零依赖 Node 示例**（先验证地址/密钥是否配对） | [`examples/node/`](./examples/node/README.md) |
 
