@@ -38,6 +38,14 @@
   **未真机验证**，且核心 SDK 不依赖它（宿主可继续用自己的后端附件接口）；
 - 索引：`Index.ts` 导出纯逻辑，`Socket.ets` 导出平台实现；`tools/check-sdk-hygiene.py` 的平台文件白名单同步更新。
 
+### 存储与缓存策略（P4）
+- 新增 `src/TinodeStore.ts`（纯逻辑）：`mergeMessages`（同 seq 覆盖 + 升序）、`unreadOf`/`isUnreadMessage`、
+  `lastMessageOf`/`previewOf`、`conversationSummaryOf`/`conversationSummariesOf`、`planMessageEviction`（每会话保留最近 N 条）、
+  `draftPreviewOf`、`messageKeyOf`；
+- 新增 `src/TinodeStorageCache.ts`：`CachedTinodeStorage` 装饰器 —— 给任意 `TinodeStorage` 加**容量受限的读缓存**（LRU），
+  写操作按会话失效，附 `stats()` / `reset()` / `invalidate(topic)`；
+- `MemoryTinodeStorage` 仍是默认实现与参考实现（语义不变）。
+
 ### 日志
 - 明文 `ws://` 的提示走 **detail（level=warn）**，不再经 failure 通道（宿主不会把它渲染成"失败"）；
   真正需要拒绝明文时用 `new TinodeSocket(url, apiKey, false)`。

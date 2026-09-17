@@ -51,6 +51,17 @@
 | `attachmentUploadUrl(serverBase)` / `uploadedRefOf(body)` | Tinode 上传地址与响应解析 |
 | `HarmonyAttachmentHttp`（`Socket.ets` 出口） | 平台 HTTP 上传/下载（**未真机验证**） |
 
+## 存储与缓存（`TinodeStore.ts` / `TinodeStorageCache.ts`，P4）
+
+| 函数/类 | 作用 |
+| --- | --- |
+| `mergeMessages` / `messageKeyOf` | 同 seq 覆盖 + 升序合并 |
+| `unreadOf` / `isUnreadMessage` | 未读数（自己发的不算） |
+| `lastMessageOf` / `previewOf` / `conversationSummaryOf` / `conversationSummariesOf` | 会话摘要与排序 |
+| `planMessageEviction(byTopic, keepPerTopic)` | 每会话保留最近 N 条（返回该删的引用） |
+| `draftPreviewOf(draft)` | 草稿预览 |
+| `CachedTinodeStorage(inner, capacity)` | 读缓存装饰器：`stats()` / `reset()` / `invalidate(topic)`，写操作按会话失效 |
+
 ## 纯函数（可直接单测/复用）
 
 `buildHi / buildLogin / buildSub / buildPub / buildGetHistory / buildNoteRead / buildNoteKeyPress / buildLeave /

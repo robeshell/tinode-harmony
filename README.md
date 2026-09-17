@@ -24,6 +24,7 @@ tinode.publish('usrXXXXXX', { txt: 'hi' });
 | **把 SDK 指向我的 Tinode 服务**（wsUrl / apikey / token / scheme / 明文与 TLS / 自建服务） | [docs/configuration.md](./docs/configuration.md) |
 | 逐方法签名、返回与失败口径 | [docs/api.md](./docs/api.md) |
 | **附件**（上传/下载/分块/进度/缓存，可选模块） | [docs/attachments.md](./docs/attachments.md) |
+| **存储与缓存策略**（去重合并/未读/会话摘要/淘汰/缓存装饰器） | [docs/storage.md](./docs/storage.md) |
 | 分层、状态机、三个端口、两种门面模式 | [docs/architecture.md](./docs/architecture.md) |
 | 凭据怎么处理、**为什么不要提交真实地址与密钥** | [docs/security.md](./docs/security.md) |
 | 连不上/403/UID mismatch/退避/脱敏 等排错 | [docs/troubleshooting.md](./docs/troubleshooting.md) |
@@ -46,6 +47,8 @@ tinode.publish('usrXXXXXX', { txt: 'hi' });
 
 **做**（P2，可选模块）：**附件** —— 纯逻辑（校验/分块规划/进度/缓存键与 LRU 淘汰/Drafty 实体互转）在 `src/TinodeAttachment.ts`，
 平台 HTTP 在 `src/TinodeAttachmentHttp.ets`（只有需要 SDK 代传文件时才用；走自己后端的宿主只用纯逻辑）。
+
+**做**（P4）：**存储与缓存策略** —— 纯逻辑（同 seq 去重合并、未读、会话摘要、容量淘汰、草稿预览）+ `CachedTinodeStorage` 装饰器（LRU，写操作按会话失效）。
 
 **不做**（有意留白）：群组（`grp`）、推送（`set{what:"deviceToken"}`）、
 业务语义（送达状态、置顶、草稿策略）——这些留在宿主应用层。

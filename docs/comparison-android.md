@@ -107,7 +107,7 @@
 | P1 | ✅ **已完成**（2026-09-17）：`TinodeTopics` + 自动重订阅 + `since` 补历史 + `knownTopics/topicState/onTopicState`，可关 | 已交付 |
 | P2 | ✅ **已完成（可选模块）**：纯逻辑 `TinodeAttachment.ts`（校验/分块/进度/缓存/LRU/Drafty 互转）+ 平台 `TinodeAttachmentHttp.ets`（**未真机验证**）；断点续传/秒传/转码仍缺 | 已交付 |
 | P3 | **账号与凭据**（`acc`/`login` 全 scheme、`Credential`/`AuthScheme`） | 中（1 批） |
-| P4 | **本地存储与缓存策略**（`Storage`/`LocalData` 等价物 + 端口默认实现） | 中（1–2 批） |
+| P4 | ✅ **已完成（策略 + 装饰器）**：`TinodeStore.ts`（去重合并/未读/摘要/淘汰/草稿预览）+ `CachedTinodeStorage`（LRU 读缓存，写操作失效）；RDB/文件实现仍由宿主提供 | 已交付 |
 | P5 | **用户资料与权限**（`me`/`fnd` meta、`Acs`/`Defacs`、LastSeen） | 中（1–2 批） |
 | P6 | **Drafty 写侧 + `fmt`**（含与安卓的偏移语义对齐） | 中（1 批） |
 | P7 | **群组**（`grp` + 成员/权限） | 大（2–3 批） |
