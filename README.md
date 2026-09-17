@@ -95,7 +95,8 @@ session.sendPub('usrXXXXXX', null, { txt: 'hi' });
 | | `subscribe(topic, opts?)` | 报文 id 或 `''` | `onFailure` |
 | | `publish(topic, content, head?)` | 报文 id 或 `''` | `onFailure`（含超帧 `maxFrameBytes`） |
 | | `history(topic, beforeSeq, limit)` | 报文 id 或 `''` | `onFailure` |
-| | `setRead/setTyping/leave/deleteTopic/deleteMessages` | 报文 id 或 `''` | `onFailure` |
+| | `deleteTopic/deleteMessages` | 报文 id 或 `''` | `onFailure` |
+| | `setRead/setTyping/leave` | **`boolean`（是否已发出）** | note/leave 在协议里没有 id，故不进 id 口径 |
 | | `conversations/messagesOf/draftOf` 等存储读写 | `Promise<…>` | 抛异常（宿主存储实现决定） |
 | `ImSession` | `start/tick/stop`、`subscribe/publish/sendPub/sendPubWithId`、`markRead`、`sendNoteKeyPress`、`loadHistory*`、`delete*`、`leave` | 报文 id 或 `void` | `onFailure` 回调 |
 | `TinodeSocket` | `open(handlers)` / `send(text)` / `close()` | `void` | `handlers.onError` |

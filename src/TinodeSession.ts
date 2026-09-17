@@ -478,6 +478,16 @@ export class ImSession {
     return id;
   }
 
+  /**
+   * note 类报文（`read`/`kp`）的统一出口。**协议里 note 没有 id**，所以这类方法统一返回
+   * `boolean`（是否已发出），而不是像 `publish` 那样返回报文 id —— 这是审计 P1-8 的统一口径。
+   */
+  private sendNote(frame: string): boolean {
+    if (this.currentState !== 'ready') return false;
+    this.transport.send(frame);
+    return true;
+  }
+
   /** 发消息（head 承载自定义语义，见契约 `customHeadMime`）。走带 id 的出口，体量守卫只有一处。 */
   sendPub(topic: string, head: ImHead | null, content: Drafty | null): void {
     if (this.currentState !== 'ready') return;
@@ -504,20 +514,19 @@ export class ImSession {
 
   /** 标记已读。 */
 
-  markRead(topic: string, seq: number): void {
-    if (this.currentState !== 'ready') return;
-    this.transport.send(buildNoteRead(topic, seq));
+  markRead(topic: string, seq: number): boolean {
+    return this.sendNote(buildNoteRead(topic, seq));
   }
 
   /** 正在输入（节流交给调用方，Android 是 2 s，见 docs/22 §1.10）。 */
-  sendTyping(topic: string): void {
-    if (this.currentState !== 'ready') return;
-    this.transport.send(buildNoteKeyPress(topic));
+  sendTyping(topic: string): boolean {
+    return this.sendNote(buildNoteKeyPress(topic));
   }
 
   /** 离开 topic（切号/退出前清订阅）。 */
-  leave(topic: string): void {
-    if (this.currentState !== 'ready') return;
+  leave(topic: string): boolean {
+    if (this.currentState !== 'ready') return false;
     this.transport.send(buildLeave(this.takeId(), topic));
+    return true;
   }
 }

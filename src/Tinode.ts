@@ -178,18 +178,20 @@ export class Tinode {
     return id;
   }
 
-  setRead(topic: string, seq: number): void {
-    if (!this.acceptTopic(topic, 'setRead')) return;
+  /** 标记已读。返回**是否已发出**（note 报文协议上没有 id，故不进 id 口径）。 */
+  setRead(topic: string, seq: number): boolean {
+    if (!this.acceptTopic(topic, 'setRead')) return false;
     if (!Number.isFinite(seq) || seq < 1) {
       this.reject(`setRead: 非法 seq=${seq}`);
-      return;
+      return false;
     }
-    this.session.markRead(topic, seq);
+    return this.session.markRead(topic, seq);
   }
 
-  setTyping(topic: string): void {
-    if (!this.acceptTopic(topic, 'setTyping')) return;
-    this.session.sendTyping(topic);
+  /** 正在输入（`kp`）。返回是否已发出（同上，note 没有 id）。 */
+  setTyping(topic: string): boolean {
+    if (!this.acceptTopic(topic, 'setTyping')) return false;
+    return this.session.sendTyping(topic);
   }
 
   history(topic: string, beforeSeq: number, limit: number): string {
@@ -220,17 +222,11 @@ export class Tinode {
     return this.session.deleteMessages(topic, valid, hard);
   }
 
-  leave(topic: string): void {
-    if (!this.acceptTopic(topic, 'leave')) return;
-    this.session.leave(topic);
+  /** 离开会话。返回是否已发出（`leave` 无 id 语义）。 */
+  leave(topic: string): boolean {
+    if (!this.acceptTopic(topic, 'leave')) return false;
+    return this.session.leave(topic);
   }
-
-  /** 上报推送 token（`set{what:"deviceToken"}`）；平台侧取 token 由宿主负责。 */
-
-  nextRequestId(): string { return this.session.nextRequestId(); }
-
-  /** 交给调用方的会话对象（高级用法：需要更细的控制时）。 */
-  rawSession(): ImSession { return this.session; }
 
   // ── 存储端口包装（宿主/上层直接可用，不必自己碰存储实现） ───────────────────
   async conversations(): Promise<TinodeTopic[]> { return this.store.loadTopics(); }

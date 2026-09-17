@@ -21,6 +21,12 @@
   实现不正确的方法比没有更糟）、移除 `rawSession()`/`nextRequestId()` 这类内部方法。
 - **归属声明**：新增 `NOTICE`，逐文件补许可头。
 
+### 公开 API 口径
+- **有 id 的请求**（`subscribe/publish/history/deleteTopic/deleteMessages`）返回**报文 id**，未就绪或参数非法返回 `''`，失败原因统一走 `onFailure`；
+- **note / leave**（协议里没有 id）返回 **`boolean`（是否已发出）**；
+- 存储端口方法返回 `Promise`，失败按宿主实现的语义 `reject`；
+- 移除了 `rawSession()` / `nextRequestId()` 这类内部方法（需要底层能力可直接使用 `ImSession`）。
+
 ### 已知限制
 - 未实现：群组（`grp`）、多端同步、推送（`set{what:"deviceToken"}`）、附件上传/下载（由宿主负责）、
   面向第三方的完整 API 文档（见 README 的 API 一览）。
