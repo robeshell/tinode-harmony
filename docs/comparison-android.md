@@ -109,7 +109,7 @@
 | P3 | 🟡 **P3-min 已完成**（2026-09-17）：`acc{user:"new"}` 注册 + `login`（token/basic/anonymous/none）+ `onAuth(uid, token)`；`Credential`/`AuthScheme` 的多凭据管理与 `acc` 更新面仍缺 | 部分交付 |
 | P4 | ✅ **已完成（策略 + 装饰器）**：`TinodeStore.ts`（去重合并/未读/摘要/淘汰/草稿预览）+ `CachedTinodeStorage`（LRU 读缓存，写操作失效）；RDB/文件实现仍由宿主提供 | 已交付 |
 | P5 | 🟡 **P5-min 已完成**（2026-09-17）：`meta.sub[]` → `TinodeProfile`（名字/头像/位点/在线/最后活动）+ `me` 自动订阅 + `onTopics`/`profileOf()` + 显示名三级兜底；`fnd` 搜人、`Acs`/`Defacs` 权限模型仍缺 | 部分交付 |
-| P6 | **Drafty 写侧 + `fmt`**（含与安卓的偏移语义对齐） | 中（1 批） |
+| P6 | ✅ **已完成**（2026-09-17）：写侧（构造/样式/实体/插入删除位移/截断）+ 渲染模型 `draftySegments`；偏移统一 UTF-16 code unit（与上游解析路径一致） | 已交付 |
 | P7 | **群组**（`grp` + 成员/权限） | 大（2–3 批） |
 | P8 | **推送**（等平台 Push Kit 真值 + AGC） | 小（受外部条件阻塞） |
 

@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 富文本写侧与渲染（P6）
+- `Drafty.ts` 新增**写侧**（纯函数，偏移统一 **UTF-16 code unit**）：`draftyPlain` / `draftyAppend` / `cloneDrafty` /
+  `draftyWithStyle`（越界裁剪、同类相邻合并）/ `draftyWithoutStyle`（切左右残段）/ `draftyWithEntity`（`data` 过白名单）/
+  `draftyLink` / `draftyMention` / `draftyImage` / **`draftyInsert`·`draftyDelete`（偏移自动位移，编辑器语义）** / `draftyTrim`；
+- 新增**渲染模型** `draftySegments(drafty)` → `DraftySegment[]`（`{at, text, styles, entity}`），UI 可直接按片段画样式与实体；
+- 偏移语义说明写进模块注释：上游 Java SDK 解析用 code unit、构建用 grapheme cluster，本端**只取 code unit**（JS/ArkTS 原生口径）。
+
 ### 账号自举（P3-min）
 - `TinodeWire`：`buildAccCreate(id, scheme, secret, fn, login=true)`（`acc{user:"new", login:true, scheme, secret, desc:{public:{fn}}}`）
   与 `accFailureText`（409 → 用户名已被占用、400 → 用户名/密码不符合要求）；

@@ -55,6 +55,20 @@
 | `attachmentUploadUrl(serverBase)` / `uploadedRefOf(body)` | Tinode 上传地址与响应解析 |
 | `HarmonyAttachmentHttp`（`Socket.ets` 出口） | 平台 HTTP 上传/下载（**未真机验证**） |
 
+## 富文本（`Drafty.ts`，P6）
+
+读侧：`parseDraftyJson` / `draftyText` / `draftyEntities` / `hasEntityType` / `firstEntityOfType` / `entityMime` / `sanitizeEntityData` / `encodeDrafty`。
+写侧（偏移统一 **UTF-16 code unit**）：
+
+| 函数 | 作用 |
+| --- | --- |
+| `draftyPlain` / `draftyAppend` / `cloneDrafty` | 构造与追加（纯函数） |
+| `draftyWithStyle` / `draftyWithoutStyle` | 加/去样式（`ST/EM/DL/CO`），越界裁剪、同类相邻合并、切残段 |
+| `draftyWithEntity` / `draftyLink` / `draftyMention` / `draftyImage` | 加实体（`data` 按白名单过滤） |
+| `draftyInsert` / `draftyDelete` | 编辑文本，**已有样式/实体偏移自动位移** |
+| `draftyTrim` | 截断（越界样式裁掉、实体整批丢弃） |
+| `draftySegments` | 渲染模型：`{at, text, styles, entity}[]`，UI 直接画 |
+
 ## 账号（P3-min）
 
 | 入口 | 说明 |

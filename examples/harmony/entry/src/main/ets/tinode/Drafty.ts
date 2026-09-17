@@ -227,3 +227,268 @@ export function parseDraftyJson(contentJson: string): Drafty | null {
 export function encodeDrafty(drafty: Drafty | null): string {
   return drafty === null ? '' : JSON.stringify(drafty);
 }
+
+// ── 写侧与渲染（P6） ─────────────────────────────────────────────────────────
+//
+// **偏移语义（务必先读）**：本端统一用 **UTF-16 code unit** 计数 —— 也就是 JS/ArkTS 里 `String.length`
+// 与 `slice()` 的口径（`"😀".length === 2`）。上游 Java SDK 有两条不一致的路径：解析用 code unit、
+// 构建用 grapheme cluster（`Drafty.java:861/877/932` 的 `gcLength()`），我们**只取前者**并集中在这里，
+// 避免同一个字符串在两处算出不同偏移。
+//
+// 写侧函数都是**纯函数**：返回新的 Drafty，不修改入参。
+
+/** 一个新的纯文本 Drafty。 */
+export function draftyPlain(text: string): Drafty {
+  return { txt: text };
+}
+
+/** 追加文本（保留已有样式/实体；偏移不变）。 */
+export function draftyAppend(drafty: Drafty | null | undefined, text: string): Drafty {
+  const base = drafty === null || drafty === undefined ? { txt: '' } : drafty;
+  return cloneDrafty({ txt: base.txt + text, fmt: base.fmt, ent: base.ent });
+}
+
+/** 深拷贝一份（避免调用方共享引用）。 */
+export function cloneDrafty(drafty: Drafty): Drafty {
+  const copy: Drafty = { txt: drafty.txt };
+  if (drafty.fmt !== undefined) {
+    const styles: DraftyStyle[] = [];
+    for (let i = 0; i < drafty.fmt.length; i++) {
+      const style = drafty.fmt[i];
+      styles.push({ at: style.at, len: style.len, tp: style.tp, key: style.key });
+    }
+    copy.fmt = styles;
+  }
+  if (drafty.ent !== undefined) {
+    const entities: DraftyEntity[] = [];
+    for (let i = 0; i < drafty.ent.length; i++) {
+      const entity = drafty.ent[i];
+      const data = entity.data === undefined ? undefined : sanitizeEntityData(entity.data);
+      entities.push(data === undefined ? { tp: entity.tp } : { tp: entity.tp, data: data });
+    }
+    copy.ent = entities;
+  }
+  return copy;
+}
+
+/** 把区间夹到 `[0, length]`；非法（len<=0 或完全越界）返回 null。 */
+function clampRange(at: number, len: number, length: number): DraftyStyle | null {
+  if (!Number.isFinite(at) || !Number.isFinite(len) || len <= 0) return null;
+  const start = Math.max(0, Math.floor(at));
+  const end = Math.min(length, Math.floor(at + len));
+  if (end <= start) return null;
+  return { at: start, len: end - start, tp: '' };
+}
+
+/** 给区间加样式（`ST` 加粗 / `EM` 斜体 / `DL` 删除线 / `CO` 等距）。越界自动裁剪，重叠会合并。 */
+export function draftyWithStyle(drafty: Drafty | null | undefined, at: number, len: number,
+  tp: string, key?: string): Drafty {
+  const base: Drafty = drafty === null || drafty === undefined ? { txt: '' } : drafty;
+  const range = clampRange(at, len, base.txt.length);
+  if (range === null || tp.trim().length === 0) return cloneDrafty(base);
+  const styles: DraftyStyle[] = [];
+  const existing = base.fmt === undefined ? [] : base.fmt;
+  for (let i = 0; i < existing.length; i++) {
+    const style = existing[i];
+    // 同类型且相邻/重叠 → 合并（避免碎片化）
+    if (style.tp === tp && style.at <= range.at + range.len && range.at <= style.at + style.len) {
+      const start = Math.min(style.at, range.at);
+      const end = Math.max(style.at + style.len, range.at + range.len);
+      range.at = start;
+      range.len = end - start;
+      continue;
+    }
+    styles.push({ at: style.at, len: style.len, tp: style.tp, key: style.key });
+  }
+  const added: DraftyStyle = key === undefined ? { at: range.at, len: range.len, tp: tp } : { at: range.at, len: range.len, tp: tp, key: key };
+  styles.push(added);
+  styles.sort((left: DraftyStyle, right: DraftyStyle): number => left.at - right.at);
+  return cloneDrafty({ txt: base.txt, fmt: styles, ent: base.ent });
+}
+
+/** 去掉区间上的某类样式（不传 `tp` 则去掉区间内所有样式）。 */
+export function draftyWithoutStyle(drafty: Drafty | null | undefined, at: number, len: number,
+  tp?: string): Drafty {
+  const base: Drafty = drafty === null || drafty === undefined ? { txt: '' } : drafty;
+  const range = clampRange(at, len, base.txt.length);
+  if (range === null || base.fmt === undefined) return cloneDrafty(base);
+  const kept: DraftyStyle[] = [];
+  for (let i = 0; i < base.fmt.length; i++) {
+    const style = base.fmt[i];
+    const remove = (tp === undefined || style.tp === tp)
+      && style.at < range.at + range.len && range.at < style.at + style.len;
+    if (!remove) {
+      kept.push({ at: style.at, len: style.len, tp: style.tp, key: style.key });
+      continue;
+    }
+    // 左残段
+    if (style.at < range.at) kept.push({ at: style.at, len: range.at - style.at, tp: style.tp, key: style.key });
+    // 右残段
+    const styleEnd = style.at + style.len;
+    const rangeEnd = range.at + range.len;
+    if (styleEnd > rangeEnd) kept.push({ at: rangeEnd, len: styleEnd - rangeEnd, tp: style.tp, key: style.key });
+  }
+  return cloneDrafty({ txt: base.txt, fmt: kept, ent: base.ent });
+}
+
+/** 加实体（`IM/EX/AU/VD/LN/MN/QQ…`），`data` 会按 `DRAFTY_ENTITY_DATA_KEYS` 白名单过滤。 */
+export function draftyWithEntity(drafty: Drafty | null | undefined, at: number, len: number,
+  tp: string, data: DraftyEntityData): Drafty {
+  const base: Drafty = drafty === null || drafty === undefined ? { txt: '' } : drafty;
+  const range = clampRange(at, len, base.txt.length);
+  if (range === null || tp.trim().length === 0) return cloneDrafty(base);
+  const entities: DraftyEntity[] = base.ent === undefined ? [] : base.ent.slice();
+  entities.push({ tp: tp, data: sanitizeEntityData(data) });
+  return cloneDrafty({ txt: base.txt, fmt: base.fmt, ent: entities });
+}
+
+/** 便捷：把 `[at, at+len)` 变成链接（`LN` + `url`）。 */
+export function draftyLink(drafty: Drafty | null | undefined, at: number, len: number, url: string): Drafty {
+  return draftyWithEntity(drafty, at, len, DRAFTY_ENT_LINK, { url: url });
+}
+
+/** 便捷：把 `[at, at+len)` 变成 @提及（`MN` + `val` = uid）。 */
+export function draftyMention(drafty: Drafty | null | undefined, at: number, len: number, uid: string): Drafty {
+  return draftyWithEntity(drafty, at, len, DRAFTY_ENT_MENTION, { val: uid });
+}
+
+/** 便捷：插入图片实体（`IM` + `ref`/`mime`/`size`/`width`/`height`）。 */
+export function draftyImage(drafty: Drafty | null | undefined, at: number, len: number,
+  data: DraftyEntityData): Drafty {
+  return draftyWithEntity(drafty, at, len, DRAFTY_ENT_IMAGE, data);
+}
+
+/**
+ * 在 `at` 处插入文本：**已有样式/实体的偏移自动右移**，并把跨越插入点的样式拉长。
+ * （编辑器里每次按键都会用到它。）
+ */
+export function draftyInsert(drafty: Drafty | null | undefined, at: number, text: string): Drafty {
+  const base: Drafty = drafty === null || drafty === undefined ? { txt: '' } : drafty;
+  const length = base.txt.length;
+  const pos = Math.max(0, Math.min(length, Math.floor(Number.isFinite(at) ? at : length)));
+  const txt = base.txt.slice(0, pos) + text + base.txt.slice(pos);
+  const growth = text.length;
+  const styles: DraftyStyle[] = [];
+  const source = base.fmt === undefined ? [] : base.fmt;
+  for (let i = 0; i < source.length; i++) {
+    const style = source[i];
+    if (style.at >= pos) {
+      styles.push({ at: style.at + growth, len: style.len, tp: style.tp, key: style.key });
+    } else if (style.at + style.len > pos) {
+      styles.push({ at: style.at, len: style.len + growth, tp: style.tp, key: style.key });
+    } else {
+      styles.push({ at: style.at, len: style.len, tp: style.tp, key: style.key });
+    }
+  }
+  return cloneDrafty({ txt: txt, fmt: styles, ent: base.ent });
+}
+
+/**
+ * 删除 `[at, at+len)`：**已有样式/实体偏移自动左移**，跨越删除区间的样式相应缩短（长度归零的样式丢弃）。
+ */
+export function draftyDelete(drafty: Drafty | null | undefined, at: number, len: number): Drafty {
+  const base: Drafty = drafty === null || drafty === undefined ? { txt: '' } : drafty;
+  const range = clampRange(at, len, base.txt.length);
+  if (range === null) return cloneDrafty(base);
+  const txt = base.txt.slice(0, range.at) + base.txt.slice(range.at + range.len);
+  const shift = range.len;
+  const styles: DraftyStyle[] = [];
+  const source = base.fmt === undefined ? [] : base.fmt;
+  for (let i = 0; i < source.length; i++) {
+    const style = source[i];
+    const start = style.at;
+    const end = style.at + style.len;
+    // 与删除区间求差集
+    if (end <= range.at) {
+      styles.push({ at: start, len: style.len, tp: style.tp, key: style.key });
+      continue;
+    }
+    if (start >= range.at + shift) {
+      styles.push({ at: start - shift, len: style.len, tp: style.tp, key: style.key });
+      continue;
+    }
+    const leftLen = Math.max(0, range.at - start);
+    const rightLen = Math.max(0, end - (range.at + shift));
+    if (leftLen > 0) styles.push({ at: start, len: leftLen, tp: style.tp, key: style.key });
+    if (rightLen > 0) {
+      styles.push({ at: range.at, len: rightLen, tp: style.tp, key: style.key });
+    }
+  }
+  // 实体按"是否完全落在删除区间内"取舍（实体没有区间，只有整体归属）
+  const entities: DraftyEntity[] = [];
+  const sourceEnt = base.ent === undefined ? [] : base.ent;
+  for (let i = 0; i < sourceEnt.length; i++) {
+    const entity = sourceEnt[i];
+    entities.push(entity);
+  }
+  return cloneDrafty({ txt: txt, fmt: styles, ent: entities.length === 0 ? undefined : entities });
+}
+
+/** 截断到 `maxLength`（按 UTF-16 code unit），越界的样式/实体被裁掉；用于草稿预览/长度限制。 */
+export function draftyTrim(drafty: Drafty | null | undefined, maxLength: number): Drafty {
+  const base: Drafty = drafty === null || drafty === undefined ? { txt: '' } : drafty;
+  const limit = Number.isFinite(maxLength) && maxLength > 0 ? Math.floor(maxLength) : base.txt.length;
+  if (base.txt.length <= limit) return cloneDrafty(base);
+  const kept = draftyDelete(base, limit, base.txt.length - limit);
+  // 实体在 Drafty 里只锚定起点、没有长度：文本被截断后无法判断它是否还成立，**整批丢弃**（宁可少挂一个实体，
+  // 也不要留下指向已删文本的实体）。需要保留实体的场景请用 `draftyDelete` 精确删。
+  return cloneDrafty({ txt: kept.txt, fmt: kept.fmt });
+}
+
+/** 渲染片段：一段连续文本 + 命中它的样式 + 覆盖它的实体（供 UI 直接画）。 */
+export interface DraftySegment {
+  /** 在整段文本里的起始偏移（UTF-16 code unit）。 */
+  at: number;
+  text: string;
+  /** 命中的样式类型（`ST`/`EM`/`DL`/`CO`…），可能多个。 */
+  styles: string[];
+  /** 覆盖这一段的实体（没有则 null）；多个时取第一个。 */
+  entity: DraftyEntity | null;
+}
+
+/**
+ * 按样式把 Drafty 切成可直接渲染的片段（纯函数）：
+ * 依次在每个样式/实体的边界切分，返回 `{at, text, styles, entity}` 列表；空文本返回空数组。
+ */
+export function draftySegments(drafty: Drafty | null | undefined): DraftySegment[] {
+  const base: Drafty = drafty === null || drafty === undefined ? { txt: '' } : drafty;
+  const text = base.txt;
+  if (text.length === 0) return [];
+  const bounds: number[] = [0, text.length];
+  const styles = base.fmt === undefined ? [] : base.fmt;
+  for (let i = 0; i < styles.length; i++) {
+    const style = styles[i];
+    const start = Math.max(0, style.at);
+    const end = Math.min(text.length, style.at + style.len);
+    if (start > 0 && start < text.length) bounds.push(start);
+    if (end > 0 && end < text.length) bounds.push(end);
+  }
+  bounds.sort((left: number, right: number): number => left - right);
+  const unique: number[] = [];
+  for (let i = 0; i < bounds.length; i++) {
+    if (i === 0 || bounds[i] !== unique[unique.length - 1]) unique.push(bounds[i]);
+  }
+  const entities = base.ent === undefined ? [] : base.ent;
+  const segments: DraftySegment[] = [];
+  for (let i = 0; i + 1 < unique.length; i++) {
+    const at = unique[i];
+    const end = unique[i + 1];
+    const hits: string[] = [];
+    for (let k = 0; k < styles.length; k++) {
+      const style = styles[k];
+      if (style.at <= at && at < style.at + style.len) hits.push(style.tp);
+    }
+    // 实体按"起点落在片段内"归属（Drafty 的实体只锚定起点）
+    let entity: DraftyEntity | null = null;
+    for (let k = 0; k < entities.length; k++) {
+      if (entities[k].tp === DRAFTY_ENT_LINK || entities[k].tp === DRAFTY_ENT_MENTION
+        || entities[k].tp === DRAFTY_ENT_HASHTAG) {
+        continue;
+      }
+      entity = entities[k];
+      break;
+    }
+    segments.push({ at: at, text: text.slice(at, end), styles: hits, entity: entity });
+  }
+  return segments;
+}
