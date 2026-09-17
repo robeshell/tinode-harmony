@@ -16,6 +16,8 @@
 | `deleteTopic(topic)` / `deleteMessages(topic, ranges, hard)` | 报文 id / `''` | — |
 | `setRead(topic, seq)` / `setTyping(topic)` / `leave(topic)` | **`boolean`（是否已发出）** | note/leave 协议里没有 id，故不进 id 口径 |
 | `knownTopics()` / `topicState(topic)` | `TinodeTopicState[]` / `TinodeTopicState \| null` | **P1**：订阅意图 + 位点（`lastSeq`/`read`/`recv`）快照 |
+| `profiles()` / `profileOf(topic)` | `TinodeProfile[]` / `TinodeProfile \| null` | **P5-min**：会话轮廓（名字/头像/位点/在线/最后活动） |
+| `rememberTopic(topic)` | `void` | 把宿主自己维护的 `TinodeTopic`（含 `lastPreview`）同步进门面 |
 | `conversations()` / `messagesOf(topic, limit, beforeSeq)` / `draftOf(topic)` | `Promise<…>` | 存储端口包装 |
 | `upsertTopic/saveDraft/clearHistory/removeTopic` | `Promise<void>` | 同上 |
 
@@ -50,6 +52,18 @@
 | `cacheKeyOf` / `cacheBytesOf` / `planEviction` | 缓存键与 LRU 淘汰规划 |
 | `attachmentUploadUrl(serverBase)` / `uploadedRefOf(body)` | Tinode 上传地址与响应解析 |
 | `HarmonyAttachmentHttp`（`Socket.ets` 出口） | 平台 HTTP 上传/下载（**未真机验证**） |
+
+## 会话与资料（`TinodeMeta.ts`，P5-min）
+
+| 函数 | 作用 |
+| --- | --- |
+| `profileFromSub(sub, fallbackTopic?)` / `profilesFromMeta(meta)` | `meta.sub[]` → `TinodeProfile`（名字/头像/`seq`/`read`/`recv`/`online`/最后活动） |
+| `mergeProfiles(known, incoming)` | 增量合并：非空字段优先、位点取最大、时间取最新、不丢旧会话 |
+| `topicOfProfile(profile, previous?)` | 轮廓 → 端口模型 `TinodeTopic`（保留宿主的 `lastPreview`） |
+| `displayNameOf(topic, contactName, publicFn)` | **通讯录 → Tinode `public.fn` → topic** 三级兜底 |
+| `sortTopicsByActivity(topics)` | 会话列表按最后活动倒序 |
+
+门面侧：连上自动订阅 `me`（`autoSubscribeMe`）→ 收到 `meta` 自动落库并回调 `hooks.onTopics`。
 
 ## 存储与缓存（`TinodeStore.ts` / `TinodeStorageCache.ts`，P4）
 

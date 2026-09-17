@@ -17,6 +17,7 @@ export * from './TinodeMessage.ts';
 export * from './TinodeStorage.ts';
 export * from './TinodeTopics.ts';
 export * from './TinodeAttachment.ts';
+export * from './TinodeMeta.ts';
 export * from './TinodeStore.ts';
 export * from './TinodeStorageCache.ts';
 export * from './Tinode.ts';

@@ -2,6 +2,16 @@
 
 本文件记录 `tinode-harmony` 的版本变更（遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本）。
 
+## [Unreleased]
+
+### 会话与资料自举（P5-min）
+- 新增 `src/TinodeMeta.ts`（纯逻辑）：`profileFromSub` / `profilesFromMeta`（`meta.sub[]` → `TinodeProfile`：
+  名字/头像/`seq`/`read`/`recv`/`online`/最后活动）、`mergeProfiles`（非空字段优先 + 位点取最大 + 时间取最新）、
+  `topicOfProfile`（→ 端口模型 `TinodeTopic`）、`displayNameOf`（**通讯录 → `public.fn` → topic** 三级兜底）、`sortTopicsByActivity`；
+- 门面：连上后**自动订阅 `me`**（`autoSubscribeMe`，默认开）→ 收到 `meta` 自动合并成**会话列表**、落库（`storage.upsertTopic`）
+  并回调 **`hooks.onTopics`**；新增 `profiles()` / `profileOf(topic)` / `rememberTopic(topic)`；
+- 效果：宿主不再需要自己写"从 meta 取名字/头像/未读"这一层（我们自己的 App 之前写了 446 行的 `ImConversation.ts`）。
+
 ## [0.1.0] - 2026-09-17
 
 首个公开版本。协议层（`hi/login/sub/pub/get/set/note/del/leave`）与会话状态机（连接→握手→登录→就绪、退避重连、代次守卫）

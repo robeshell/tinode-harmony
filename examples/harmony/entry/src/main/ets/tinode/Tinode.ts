@@ -17,10 +17,12 @@
 import type { ImHead } from './TinodeHead.ts';
 import type { Drafty } from './Drafty.ts';
 import type { TinodeTopicState } from './TinodeTopics.ts';
+import { mergeProfiles, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
+import type { TinodeProfile } from './TinodeMeta.ts';
 import { ImSession, defaultSessionConfig } from './TinodeSession.ts';
 import type { ImSessionConfig, ImSessionState, ImTransport } from './TinodeSession.ts';
 import type { ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, DelRange } from './TinodeWire.ts';
-import { tinodeLogDetail, tinodeLogFailure } from './TinodeLog.ts';
+import { redactTopic, tinodeLogDetail, tinodeLogFailure } from './TinodeLog.ts';
 import { buildPub } from './TinodeWire.ts';
 import { MemoryTinodeStorage } from './TinodeStorage.ts';
 import type { TinodeStorage } from './TinodeStorage.ts';
@@ -57,6 +59,8 @@ export interface TinodeHooks {
   onServerVersion?: (version: string) => void;
   /** 主题状态变化（订阅结果 / 位点推进）——P1 新增，可选。 */
   onTopicState?: (state: TinodeTopicState) => void;
+  /** 会话列表刷新（P5-min：收到 `meta` 合并后回调，可直接渲染列表）。 */
+  onTopics?: (topics: TinodeTopic[]) => void;
 }
 
 /** 构造门面的参数。 */
@@ -72,6 +76,11 @@ export interface TinodeOptions {
   maxFrameBytes?: number;
   /** 连上后由 SDK 自动重新订阅登记过的主题（默认 true，见 `ImSessionConfig.autoResubscribe`）。 */
   autoResubscribe?: boolean;
+  /**
+   * 连上后自动订阅 `me`（默认 **true**）——`me` 的 `meta.sub[]` 就是"我的会话列表"，
+   * 门面据此落库并回调 `hooks.onTopics`。宿主完全自己管会话列表时置 false。
+   */
+  autoSubscribeMe?: boolean;
   /** 重连后从各主题 `lastSeq+1` 补历史（默认 true，见 `ImSessionConfig.syncHistoryOnReconnect`）。 */
   syncHistoryOnReconnect?: boolean;
   /**
@@ -95,15 +104,31 @@ export class Tinode {
   private readonly hooks: TinodeHooks;
   private readonly persistIncoming: boolean;
   private readonly maxFrameBytes: number;
+  private readonly autoSubscribeMe: boolean;
+  /** P5-min：已知的会话轮廓（内存态；落库走 `store.upsertTopic`）。 */
+  private profilesByTopic: Map<string, TinodeProfile> = new Map();
+  /** 最近一次落库的会话模型（保留 `lastPreview` 等宿主维护的字段）。 */
+  private topicsByTopic: Map<string, TinodeTopic> = new Map();
+  private meSubscribed: boolean = false;
 
   constructor(options: TinodeOptions) {
     this.hooks = options.hooks === undefined ? {} : options.hooks;
     this.store = options.storage === undefined ? new MemoryTinodeStorage() : options.storage;
     this.persistIncoming = options.persistIncoming === undefined ? true : options.persistIncoming;
+    this.autoSubscribeMe = options.autoSubscribeMe === undefined ? true : options.autoSubscribeMe;
     const cap = options.maxFrameBytes;
     this.maxFrameBytes = cap === undefined || !Number.isFinite(cap) || cap <= 0 ? DEFAULT_MAX_FRAME_BYTES : cap;
     this.session = new ImSession(options.transport, options.config, {
       onState: (state: ImSessionState) => {
+        // P5-min：进入 ready 时自动订阅 `me`（会话列表来源）；离开 ready 时重置标记，重连后会再订一次。
+        if (state === 'ready') {
+          if (this.autoSubscribeMe && !this.meSubscribed) {
+            this.meSubscribed = true;
+            this.session.subscribeTracked('me', false, true, 0);
+          }
+        } else {
+          this.meSubscribed = false;
+        }
         const done = this.hooks.onState;
         if (done !== undefined) done(state);
       },
@@ -117,6 +142,7 @@ export class Tinode {
         if (done !== undefined) done(pres);
       },
       onMeta: (meta: ImMeta) => {
+        this.absorbMeta(meta);                    // P5-min：把 meta.sub[] 变成会话列表
         const done = this.hooks.onMeta;
         if (done !== undefined) done(meta);
       },
@@ -165,6 +191,52 @@ export class Tinode {
   start(nowMs: number): void { this.session.start(nowMs); }
   tick(nowMs: number): void { this.session.tick(nowMs); }
   stop(): void { this.session.stop(); }
+  /**
+   * P5-min：把一条 `meta` 里的 `sub[]` 合并成会话列表，落库并回调 `hooks.onTopics`。
+   * 纯逻辑在 `TinodeMeta.ts`（`profilesFromMeta` / `mergeProfiles` / `topicOfProfile`）。
+   */
+  private absorbMeta(meta: ImMeta): void {
+    const incoming = profilesFromMeta(meta);
+    if (incoming.length === 0) return;
+    const known: TinodeProfile[] = [];
+    this.profilesByTopic.forEach((profile: TinodeProfile) => { known.push(profile); });
+    const merged = mergeProfiles(known, incoming);
+    this.profilesByTopic = new Map<string, TinodeProfile>();
+    const topics: TinodeTopic[] = [];
+    for (let i = 0; i < merged.length; i++) {
+      const profile = merged[i];
+      this.profilesByTopic.set(profile.topic, profile);
+      const previous = this.topicsByTopic.get(profile.topic);
+      const topic = topicOfProfile(profile, previous);
+      this.topicsByTopic.set(profile.topic, topic);
+      topics.push(topic);
+      this.store.upsertTopic(topic).catch((error: Object) => {
+        tinodeLogDetail('tinode', `upsertTopic failed for ${redactTopic(profile.topic)}`, 'error');
+      });
+    }
+    const sorted = sortTopicsByActivity(topics);
+    const done = this.hooks.onTopics;
+    if (done !== undefined) done(sorted);
+  }
+
+  /** P5-min：当前已知的会话列表（按最后活动倒序；未收到 `meta` 前为空）。 */
+  profiles(): TinodeProfile[] {
+    const rows: TinodeProfile[] = [];
+    this.profilesByTopic.forEach((profile: TinodeProfile) => { rows.push(profile); });
+    return rows;
+  }
+
+  /** P5-min：单个会话的轮廓（没收到过返回 null）。 */
+  profileOf(topic: string): TinodeProfile | null {
+    const profile = this.profilesByTopic.get(topic.trim());
+    return profile === undefined ? null : profile;
+  }
+
+  /** 登记一个已知会话模型（宿主自己 upsert 过 topic 时同步进来，避免 `lastPreview` 被覆盖）。 */
+  rememberTopic(topic: TinodeTopic): void {
+    this.topicsByTopic.set(topic.topic, topic);
+  }
+
   /** P1：登记过的主题快照（宿主可据此渲染会话列表/未读，最近活动的在前）。 */
   knownTopics(): TinodeTopicState[] { return this.session.knownTopics(); }
 

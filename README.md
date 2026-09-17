@@ -37,6 +37,18 @@ tinode.publish('usrXXXXXX', { txt: 'hi' });
 
 ---
 
+## 0. 集成前置条件（先看这个）
+
+用本 SDK 前，请确认你具备下面任一条件：
+
+| 你的条件 | 你能做什么 | 需要谁 |
+| --- | --- | --- |
+| 有自建后端，能调 `GET /device/app/im/token` 之类的接口换 Tinode token | 完整可用（我们自己的 App 就是这样） | 你的后端 |
+| 有个跑着的 Tinode 服务，且**已在服务端建好账号** | 用 `loginScheme: 'basic'`（`用户名:密码`）直接登录 | Tinode 服务端（CLI/REST 建号） |
+| 想**从客户端直接注册/登录** | ✅ 已支持（P3-min：`Tinode.register(user, password, fn)` 走 `acc{user:"new", login:true}`） | — |
+| 想显示"谁在跟我聊"（名字/头像） | ✅ 已支持（P5-min：收到 `meta` 自动落成会话列表，`hooks.onTopics` 直接渲染） | — |
+| 需要群聊 / 手机推送通知 | ❌ 暂不支持（群组 P7、推送 P8；推送还卡 AGC 开通） | — |
+
 ## 1. 它做什么 / 不做什么
 
 **做**：把 Tinode 的线路协议与会话生命周期封装成"宿主不用自己解析报文"的一层；

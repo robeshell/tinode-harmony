@@ -225,3 +225,64 @@ test('帧体量守卫：超过 maxFrameBytes 的 publish 不发且回调失败',
   assert.equal(DEFAULT_MAX_FRAME_BYTES, 256 * 1024);
 });
 
+
+// P5-min：收到 meta 后自动落库会话列表并回调 onTopics；ready 时自动订阅 me
+test('P5-min：meta.sub 变会话列表（落库 + onTopics），ready 时自动订 me', async () => {
+  const { Tinode } = await import('../src/Tinode.ts');
+  const { MemoryTinodeStorage } = await import('../src/TinodeStorage.ts');
+  const { defaultSessionConfig } = await import('../src/TinodeSession.ts');
+
+  const sent = [];
+  let handlers = null;
+  const transport = {
+    open: (h) => { handlers = h; },
+    send: (text) => sent.push(text),
+    close: () => { handlers = null; }
+  };
+  const storage = new MemoryTinodeStorage();
+  const topicsSeen = [];
+  const facade = new Tinode({
+    transport,
+    config: defaultSessionConfig('wss://im.example.com:6061/v0/channels', 'tk', 'App/1.0', ''),
+    storage,
+    hooks: { onTopics: (topics) => topicsSeen.push(topics) }
+  });
+  facade.start(0);
+  handlers.onOpen(10);
+  handlers.onMessage(JSON.stringify({ ctrl: { id: '1', code: 200, params: { ver: '0.25' } } }), 20);
+  handlers.onMessage(JSON.stringify({ ctrl: { id: '2', code: 200, params: { user: 'usrMe' } } }), 30);
+
+  const frames = sent.map((f) => JSON.parse(f));
+  const meSub = frames.find((f) => f.sub !== undefined && f.sub.topic === 'me');
+  assert.ok(meSub, 'ready 后自动订阅 me');
+  assert.equal(meSub.sub.get.what, 'sub', 'me 只要 sub（订阅列表）');
+
+  handlers.onMessage(JSON.stringify({
+    meta: {
+      id: '3', topic: 'me',
+      sub: [
+        { topic: 'usrA', user: 'usrA', seq: 12, read: 10, recv: 11, touched: '2026-09-17T01:00:00Z', pub: { fn: '张三', photo: 'ref/p1' } },
+        { topic: 'usrB', user: 'usrB', seq: 3, read: 3, recv: 3, touched: '2026-09-16T01:00:00Z', pub: { fn: '李四' } }
+      ]
+    }
+  }), 40);
+  await new Promise((r) => setTimeout(r, 20));
+
+  const profiles = facade.profiles();
+  assert.equal(profiles.length, 2);
+  assert.equal(facade.profileOf('usrA').name, '张三');
+  assert.equal(facade.profileOf('usrA').photo, 'ref/p1');
+  assert.equal(topicsSeen.length, 1, 'onTopics 回调一次');
+  assert.deepEqual(topicsSeen[0].map((t) => t.topic), ['usrA', 'usrB'], '按最后活动倒序');
+  const stored = await storage.loadTopics();
+  const storedA = stored.find((t) => t.topic === 'usrA');
+  assert.equal(storedA.name, '张三', '已落库');
+  assert.equal(storedA.seq, 12);
+
+  // 再来一条 meta：名字为空时保留旧值、seq 取最大
+  handlers.onMessage(JSON.stringify({ meta: { id: '4', topic: 'me', sub: [{ topic: 'usrA', seq: 20, pub: { fn: '' } }] } }), 50);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal(facade.profileOf('usrA').name, '张三');
+  assert.equal(facade.profileOf('usrA').seq, 20);
+  assert.equal(facade.profiles().length, 2, '没有把 usrB 弄丢');
+});
