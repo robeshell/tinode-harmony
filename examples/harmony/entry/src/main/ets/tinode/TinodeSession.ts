@@ -27,7 +27,8 @@
 import {
   IM_PROBE_PAYLOAD,
   backoffDelayMs, buildDelMessages, buildDelTopic, buildGetHistory, buildHi, buildLeave, buildLogin,
-  accFailureText, buildAccCreate, buildGetHistorySince, buildNoteKeyPress, buildNoteRead, buildPub, buildSub,
+  accFailureText, buildAccAddCredential, buildAccCreate, buildAccUpdate, buildGetHistorySince, buildGetMetaDesc,
+  buildGetMetaSub, buildSetPublicDesc, buildNoteKeyPress, buildNoteRead, buildPub, buildSub,
   ctrlFailureText, ctrlIsFatal, ctrlOk,
   parseServerMessage, parseWsEndpoint
 } from './TinodeWire.ts';
@@ -622,6 +623,56 @@ export class ImSession {
     const id = this.takeId();
     this.accRequests.add(id);
     this.transport.send(buildAccCreate(id, scheme, secret, fn, true));
+    return id;
+  }
+
+  /**
+   * 拉某个会话/用户的公开名片（`get{what:"desc"}`，P5 余项）：结果以 `meta` 报文回来
+   * （门面会把它并进会话轮廓并回调 `onTopics`/`onMeta`）。返回报文 id；未就绪返回空串。
+   */
+  loadProfile(topic: string): string {
+    if (this.currentState !== 'ready') return '';
+    const id = this.takeId();
+    this.transport.send(buildGetMetaDesc(id, topic));
+    return id;
+  }
+
+  /** 拉"我的订阅列表"（`get{topic:"me", what:"sub"}`，P5 余项）：结果同样是 `meta`。 */
+  loadSubscriptions(limit: number = 0): string {
+    if (this.currentState !== 'ready') return '';
+    const id = this.takeId();
+    this.transport.send(buildGetMetaSub(id, 'me', limit));
+    return id;
+  }
+
+  /** 改自己的公开名片（`set{topic:"me", desc:{public}}`，P5 余项）。返回报文 id。 */
+  updatePublicName(fn: string, photo?: string): string {
+    if (this.currentState !== 'ready') return '';
+    const id = this.takeId();
+    this.transport.send(buildSetPublicDesc(id, 'me', fn, photo));
+    return id;
+  }
+
+  /**
+   * 改密码（`acc{user:<uid>, scheme:"basic"}`，P3 余项）。`user` 传自己的登录名（不是 uid）。
+   * 返回报文 id；成功/失败通过 `onCtrl`/`onFailure` 回来。
+   */
+  changePassword(user: string, newPassword: string): string {
+    const uid = this.currentUid;
+    if (this.currentState !== 'ready' || uid.length === 0) return '';
+    const id = this.takeId();
+    this.accRequests.add(id);
+    this.transport.send(buildAccUpdate(id, uid, 'basic', `${user.trim()}:${newPassword}`));
+    return id;
+  }
+
+  /** 加一个待验证凭据（邮箱/手机号，P3 余项）。返回报文 id；结果走 `onCtrl`/`onFailure`。 */
+  addCredential(meth: string, val: string): string {
+    const uid = this.currentUid;
+    if (this.currentState !== 'ready' || uid.length === 0) return '';
+    const id = this.takeId();
+    this.accRequests.add(id);
+    this.transport.send(buildAccAddCredential(id, uid, meth, val));
     return id;
   }
 

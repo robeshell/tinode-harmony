@@ -139,6 +139,14 @@ export function buildGetHistory(id: string, topic: string, before: number, limit
   });
 }
 
+/** 账号凭据（`Credential`）：`meth` 常见 `email` / `tel`；`resp` 是确认码；`done` 表示已验证。 */
+export interface ImCredential {
+  meth: string;
+  val: string;
+  resp?: string;
+  done?: boolean;
+}
+
 /** `acc` 请求体（`MsgClientAcc`）：创建账号（`user:"new"`）并可选直接登录（`login:true`）。 */
 export interface ImAccBody {
   id: string;
@@ -147,6 +155,10 @@ export interface ImAccBody {
   scheme?: string;
   secret?: string;
   desc?: ImAccDesc;
+  /** 账号凭据（加/验邮箱、手机号）。 */
+  cred?: ImCredential[];
+  /** 账号标签（服务端可用于检索）。 */
+  tags?: string[];
 }
 
 /** `acc.desc` 里本端只用 `public`（公开名片）。 */
@@ -167,6 +179,55 @@ export function buildAccCreate(id: string, scheme: string, secret: string, fn: s
   if (fn.trim().length > 0) card.fn = fn.trim();
   body.desc = { public: card };
   return JSON.stringify({ acc: body });
+}
+
+/**
+ * `acc` **更新**账号（P3 余项）：`user` 传要更新的 uid（见上游 `Tinode.java:1279` 的 `account(uid, …)`）。
+ * - 改密：`scheme: 'basic'`，`secret: '用户名:新密码'`；
+ * - 改公开名片：`fn` 非空时带上 `desc.public.fn`；
+ * - 加/验凭据：`cred` 传 `[{meth, val}]`（PNG-3：确认码用 `resp`）。
+ * `login` 固定 false（更新不是登录）。
+ */
+export function buildAccUpdate(id: string, uid: string, scheme: string, secret: string, fn?: string,
+  cred?: ImCredential[]): string {
+  const body: ImAccBody = { id: id, user: uid, login: false, scheme: scheme, secret: secret };
+  if (fn !== undefined && fn.trim().length > 0) body.desc = { public: { fn: fn.trim() } };
+  if (cred !== undefined && cred.length > 0) body.cred = cred;
+  return JSON.stringify({ acc: body });
+}
+
+/** 便捷：加一个待验证凭据（邮箱/手机号）。 */
+export function buildAccAddCredential(id: string, uid: string, meth: string, val: string): string {
+  return buildAccUpdate(id, uid, 'basic', '', undefined, [{ meth: meth, val: val }]);
+}
+
+/**
+ * `get{topic, what:"desc"}`：拉某个会话/用户的公开名片（上游 `MsgGetMeta.desc()`，
+ * `Tinode.java:850` 用它取对方资料）。结果在 `meta.desc` 里。
+ */
+export function buildGetMetaDesc(id: string, topic: string): string {
+  return JSON.stringify({ get: { id: id, topic: topic, what: 'desc' } });
+}
+
+/**
+ * `get{topic:"me", what:"sub", sub:{limit}}`：拉"我的订阅列表"（会话列表）。
+ * 与自动订阅 `me` 等价，适合宿主主动刷新。
+ */
+export function buildGetMetaSub(id: string, topic: string, limit: number): string {
+  const sub: ImPageRequest = {};
+  if (Number.isFinite(limit) && limit > 0) sub.limit = Math.floor(limit);
+  return JSON.stringify({ get: { id: id, topic: topic, what: 'sub', sub: sub } });
+}
+
+/**
+ * `set{topic, desc:{public:{fn,photo}}}`：改公开名片（上游 `MetaSetDesc`）。
+ * 传空串表示"不改这个字段"。
+ */
+export function buildSetPublicDesc(id: string, topic: string, fn: string, photo?: string): string {
+  const card: ImCard = {};
+  if (fn.trim().length > 0) card.fn = fn.trim();
+  if (photo !== undefined && photo.trim().length > 0) card.photo = photo.trim();
+  return JSON.stringify({ set: { id: id, topic: topic, desc: { public: card } } });
 }
 
 /**
@@ -354,7 +415,8 @@ export interface ImMetaSub {
 /** Tinode 公开名片（`TheCard`）：只读 `fn`（显示名）与 `photo`（头像 ref）。 */
 export interface ImCard {
   fn?: string;
-  photo?: ImPhotoRef;
+  /** `photo` 线上两种形态都出现过：字符串 ref 或 `{ref}` 对象（`cardPhotoRef` 都认）。 */
+  photo?: string | ImPhotoRef;
 }
 
 /** `photo` 可能是字符串或 `{ref}` 结构（SDK `PhotoRef` 序列化形态）。 */

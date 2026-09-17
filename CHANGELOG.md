@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 权限与账号管理（P5 余项 / P3 余项）
+- `TinodeAcs.ts`（纯逻辑）：`normalizeAccessMode`（`"wr"` → `"RW"`，`N` 显式无权限单独保留）、
+  `acsAllows` / `acsCanRead` / `acsCanWrite` / `acsIsOwner`、`parseAcs`（`{given,want,mode}`）、`parseDefacs`（`{auth,anon}`）、
+  `acsSummary`（`JRW` → `加入·读取·发送`）——对应上游 `Acs`/`AcsHelper`/`Defacs`；
+- `TinodeWire`：`buildAccUpdate`（改密/改名片，`user:<uid>` + `login:false`）、`buildAccAddCredential`（`cred:[{meth,val}]`）、
+  `buildGetMetaDesc`（`get{what:"desc"}` 拉名片）、`buildGetMetaSub`（`get{topic:"me",what:"sub"}` 拉订阅列表）、
+  `buildSetPublicDesc`（`set{topic:"me",desc:{public}}` 改自己的名片）；
+- 会话/门面：`loadProfile(topic)` / `loadSubscriptions(limit)` / `updatePublicName(fn, photo?)` / `changePassword(login, pw)` / `addCredential(meth, val)`；
+  名片应答（`meta.desc`）由门面并进会话轮廓（`profileFromDesc`），`ImCard.photo` 类型放宽为 `string | {ref}`（线上两种形态都有）。
+
 ### 富文本写侧与渲染（P6）
 - `Drafty.ts` 新增**写侧**（纯函数，偏移统一 **UTF-16 code unit**）：`draftyPlain` / `draftyAppend` / `cloneDrafty` /
   `draftyWithStyle`（越界裁剪、同类相邻合并）/ `draftyWithoutStyle`（切左右残段）/ `draftyWithEntity`（`data` 过白名单）/

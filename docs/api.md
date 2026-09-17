@@ -55,6 +55,17 @@
 | `attachmentUploadUrl(serverBase)` / `uploadedRefOf(body)` | Tinode 上传地址与响应解析 |
 | `HarmonyAttachmentHttp`（`Socket.ets` 出口） | 平台 HTTP 上传/下载（**未真机验证**） |
 
+## 权限与账号管理（`TinodeAcs.ts` + wire，P5/P3 余项）
+
+| 入口 | 作用 |
+| --- | --- |
+| `normalizeAccessMode` / `acsAllows` / `acsCanRead` / `acsCanWrite` / `acsIsOwner` / `acsSummary` | 权限字母（`J R W P A S D O`，`N`=显式无权限）解析与判定 |
+| `parseAcs(raw)` / `parseDefacs(raw)` | `desc.acs = {given,want,mode}`、`desc.defacs = {auth,anon}` |
+| `buildGetMetaDesc(id, topic)` / `buildGetMetaSub(id, topic, limit)` | 拉名片 / 拉订阅列表（结果在 `meta`） |
+| `buildSetPublicDesc(id, topic, fn, photo?)` | 改公开名片（`set{desc:{public}}`） |
+| `buildAccUpdate(id, uid, scheme, secret, fn?, cred?)` / `buildAccAddCredential(id, uid, meth, val)` | 改密 / 改名片 / 加凭据 |
+| `Tinode.loadProfile/loadSubscriptions/updatePublicName/changePassword/addCredential` | 门面包装（返回报文 id，结果走 `onMeta`/`onCtrl`/`onFailure`） |
+
 ## 富文本（`Drafty.ts`，P6）
 
 读侧：`parseDraftyJson` / `draftyText` / `draftyEntities` / `hasEntityType` / `firstEntityOfType` / `entityMime` / `sanitizeEntityData` / `encodeDrafty`。

@@ -17,7 +17,7 @@
 import type { ImHead } from './TinodeHead.ts';
 import type { Drafty } from './Drafty.ts';
 import type { TinodeTopicState } from './TinodeTopics.ts';
-import { applyPresence, mergeProfiles, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
+import { applyPresence, mergeProfiles, profileFromDesc, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
 import type { TinodeProfile } from './TinodeMeta.ts';
 import type { TinodeAuth } from './TinodeSession.ts';
 import { ImSession, defaultSessionConfig } from './TinodeSession.ts';
@@ -251,6 +251,9 @@ export class Tinode {
    */
   private absorbMeta(meta: ImMeta): void {
     const incoming = profilesFromMeta(meta);
+    // `get{what:"desc"}` 的结果：把名片并进对应会话（P5 余项）。`meta.topic` 就是那个会话。
+    const card = profileFromDesc(meta);
+    if (card !== null) incoming.push(card);
     if (incoming.length === 0) return;
     const known: TinodeProfile[] = [];
     this.profilesByTopic.forEach((profile: TinodeProfile) => { known.push(profile); });
@@ -316,6 +319,31 @@ export class Tinode {
   configureTokenLogin(token: string): void {
     this.session.setLoginScheme('token');
     this.session.setToken(token);
+  }
+
+  /** P5 余项：拉某个会话/用户的名片（结果并进会话列表并回调 `onTopics`）。返回报文 id 或空串。 */
+  loadProfile(topic: string): string {
+    return this.session.loadProfile(topic);
+  }
+
+  /** P5 余项：拉"我的订阅列表"（会话列表）。返回报文 id；结果走 `meta` → `onTopics`。 */
+  loadSubscriptions(limit: number = 0): string {
+    return this.session.loadSubscriptions(limit);
+  }
+
+  /** P5 余项：改自己的公开名片（`set{topic:"me"}`）。返回报文 id。 */
+  updatePublicName(fn: string, photo?: string): string {
+    return this.session.updatePublicName(fn, photo);
+  }
+
+  /** P3 余项：改密码（`acc{user:<uid>, scheme:"basic"}`）。返回报文 id；结果走 `onCtrl`/`onFailure`。 */
+  changePassword(login: string, newPassword: string): string {
+    return this.session.changePassword(login, newPassword);
+  }
+
+  /** P3 余项：加待验证凭据（邮箱/手机号）。返回报文 id。 */
+  addCredential(meth: string, val: string): string {
+    return this.session.addCredential(meth, val);
   }
 
   /** P5-min：当前已知的会话列表（按最后活动倒序；未收到 `meta` 前为空）。 */

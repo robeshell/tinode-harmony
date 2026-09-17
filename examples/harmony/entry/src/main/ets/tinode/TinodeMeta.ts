@@ -20,7 +20,7 @@
  */
 
 import { cardName, cardPhotoRef, metaSubs } from './TinodeWire.ts';
-import type { ImMeta, ImMetaSub } from './TinodeWire.ts';
+import type { ImCard, ImMeta, ImMetaSub } from './TinodeWire.ts';
 import { messageTsOf } from './TinodeMessage.ts';
 import type { TinodeTopic } from './TinodeMessage.ts';
 
@@ -170,4 +170,27 @@ export function sortTopicsByActivity(topics: TinodeTopic[]): TinodeTopic[] {
     return left.topic < right.topic ? -1 : (left.topic === right.topic ? 0 : 1);
   });
   return rows;
+}
+
+/**
+ * 从 `meta.desc` 解析公开名片（P5 余项）：`get{what:"desc"}` 的应答里 `desc.public` 是对方的 `TheCard`。
+ * `meta.topic`（缺省时用 `desc.public` 里的信息）作为会话名。解析不到返回 null。
+ */
+export function profileFromDesc(meta: ImMeta | null | undefined): TinodeProfile | null {
+  if (meta === null || meta === undefined) return null;
+  const topic = (meta.topic === undefined ? '' : meta.topic).trim();
+  if (topic.length === 0) return null;
+  const desc = meta.desc;
+  if (desc === undefined || desc === null || typeof desc !== 'object') return null;
+  const record = desc as Record<string, Object>;
+  const pub = record.public;
+  if (pub === undefined || pub === null || typeof pub !== 'object') return null;
+  const card = pub as ImCard;
+  const name = cardName(card).trim();
+  const photo = cardPhotoRef(card).trim();
+  if (name.length === 0 && photo.length === 0) return null;
+  return {
+    topic: topic, peerUid: topic, name: name, photo: photo,
+    seq: 0, read: 0, recv: 0, online: false, touchedAtMs: 0, lastSeenMs: 0
+  };
 }

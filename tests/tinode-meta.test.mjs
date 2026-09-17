@@ -90,3 +90,16 @@ test('applyPresence：on 置在线、off/gone 记最后在线、kp 只刷新活�
   assert.equal(applyPresence(offline, 'kp', undefined, 10).touchedAtMs, offline.touchedAtMs, '更早的时间不倒退');
   assert.equal(typing.lastSeenMs, offline.lastSeenMs);
 });
+
+// P5 余项：get{what:"desc"} 的名片并进会话列表
+test('profileFromDesc 与门面 absorbMeta：拉名片后列表里有名字/头像', async () => {
+  const { profileFromDesc } = await import('../src/TinodeMeta.ts');
+  const card = profileFromDesc({ topic: 'usrBob', desc: { public: { fn: '鲍勃', photo: 'ref/b1' } } });
+  assert.equal(card.topic, 'usrBob');
+  assert.equal(card.name, '鲍勃');
+  assert.equal(card.photo, 'ref/b1');
+  assert.equal(profileFromDesc({ topic: 'usrBob', desc: { public: { photo: { ref: 'r2' } } } }).photo, 'r2', '照片是 {ref} 形态也认');
+  assert.equal(profileFromDesc({ topic: '', desc: { public: { fn: 'x' } } }), null);
+  assert.equal(profileFromDesc({ topic: 'usrBob' }), null, '没有 desc → null');
+  assert.equal(profileFromDesc({ topic: 'usrBob', desc: { public: { fn: '  ' } } }), null, '名片为空 → null');
+});
