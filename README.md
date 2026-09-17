@@ -103,7 +103,8 @@ tinode.publish('usrXXXXXX', { txt: 'hi' }, { mime: 'text/x-drafty' });
 
 [快速开始](./docs/getting-started.md) · [指向 Tinode 服务](./docs/configuration.md) · [API](./docs/api.md) ·
 [架构](./docs/architecture.md) · [附件](./docs/attachments.md) · [存储](./docs/storage.md) ·
-[安全](./docs/security.md) · [排错](./docs/troubleshooting.md) · [与 Android 对比](./docs/comparison-android.md)
+[安全](./docs/security.md) · [排错](./docs/troubleshooting.md) · [与 Android 对比](./docs/comparison-android.md) ·
+[维护指南](./docs/MAINTAINING.md)（开新会话时的启动提示词）
 
 ## TODO
 
