@@ -129,10 +129,7 @@ export class Tinode {
       onState: (state: ImSessionState) => {
         // P5-min：进入 ready 时自动订阅 `me`（会话列表来源）；离开 ready 时重置标记，重连后会再订一次。
         if (state === 'ready') {
-          if (this.autoSubscribeMe && !this.meSubscribed) {
-            this.meSubscribed = true;
-            this.session.subscribeTracked('me', false, true, 0);
-          }
+          this.ensureMeSubscribed();
         } else {
           this.meSubscribed = false;
         }
@@ -178,6 +175,8 @@ export class Tinode {
         if (done !== undefined) done(version);
       },
       onAuth: (auth: TinodeAuth) => {
+        // 注册/登录成功（服务端签发凭据）→ 这时才订阅 `me`（未认证时订阅会被服务端 401 拒绝）。
+        this.ensureMeSubscribed();
         const resolve = this.pendingAuth;
         if (resolve !== null) {
           this.pendingAuth = null;
@@ -215,6 +214,17 @@ export class Tinode {
   start(nowMs: number): void { this.session.start(nowMs); }
   tick(nowMs: number): void { this.session.tick(nowMs); }
   stop(): void { this.session.stop(); }
+  /**
+   * 只在**已认证**时订阅 `me`：未认证（`loginScheme:'none'` 的注册流程）时服务端会回 401，
+   * 而 401 是致命错误会让会话进入 failed —— 所以等到拿到 uid（登录/注册成功）再订。
+   */
+  private ensureMeSubscribed(): void {
+    if (!this.autoSubscribeMe || this.meSubscribed) return;
+    if (this.session.myUid().length === 0) return;
+    this.meSubscribed = true;
+    this.session.subscribeTracked('me', false, true, 0);
+  }
+
   /**
    * P5-min：把一条 `pres`（在线状态）应用到已知轮廓：`on` → 在线；`off`/`gone`/`rec` → 离线 + 记**最后在线**时间。
    * 没见过的 topic（还没收到 `meta`）先建一条骨架，保证 `onTopics` 拿到完整列表。

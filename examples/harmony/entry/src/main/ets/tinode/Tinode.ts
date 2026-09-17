@@ -20,6 +20,7 @@ import type { TinodeTopicState } from './TinodeTopics.ts';
 import { applyPresence, mergeProfiles, profileFromDesc, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
 import type { TinodeProfile } from './TinodeMeta.ts';
 import type { TinodeAuth } from './TinodeSession.ts';
+import { encodeBasicSecret, isValidBasicLogin } from './TinodeWire.ts';
 import { ImSession, defaultSessionConfig } from './TinodeSession.ts';
 import type { ImSessionConfig, ImSessionState, ImTransport } from './TinodeSession.ts';
 import type { ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, DelRange } from './TinodeWire.ts';
@@ -128,10 +129,7 @@ export class Tinode {
       onState: (state: ImSessionState) => {
         // P5-min：进入 ready 时自动订阅 `me`（会话列表来源）；离开 ready 时重置标记，重连后会再订一次。
         if (state === 'ready') {
-          if (this.autoSubscribeMe && !this.meSubscribed) {
-            this.meSubscribed = true;
-            this.session.subscribeTracked('me', false, true, 0);
-          }
+          this.ensureMeSubscribed();
         } else {
           this.meSubscribed = false;
         }
@@ -177,6 +175,8 @@ export class Tinode {
         if (done !== undefined) done(version);
       },
       onAuth: (auth: TinodeAuth) => {
+        // 注册/登录成功（服务端签发凭据）→ 这时才订阅 `me`（未认证时订阅会被服务端 401 拒绝）。
+        this.ensureMeSubscribed();
         const resolve = this.pendingAuth;
         if (resolve !== null) {
           this.pendingAuth = null;
@@ -214,6 +214,17 @@ export class Tinode {
   start(nowMs: number): void { this.session.start(nowMs); }
   tick(nowMs: number): void { this.session.tick(nowMs); }
   stop(): void { this.session.stop(); }
+  /**
+   * 只在**已认证**时订阅 `me`：未认证（`loginScheme:'none'` 的注册流程）时服务端会回 401，
+   * 而 401 是致命错误会让会话进入 failed —— 所以等到拿到 uid（登录/注册成功）再订。
+   */
+  private ensureMeSubscribed(): void {
+    if (!this.autoSubscribeMe || this.meSubscribed) return;
+    if (this.session.myUid().length === 0) return;
+    this.meSubscribed = true;
+    this.session.subscribeTracked('me', false, true, 0);
+  }
+
   /**
    * P5-min：把一条 `pres`（在线状态）应用到已知轮廓：`on` → 在线；`off`/`gone`/`rec` → 离线 + 记**最后在线**时间。
    * 没见过的 topic（还没收到 `meta`）先建一条骨架，保证 `onTopics` 拿到完整列表。
@@ -290,6 +301,7 @@ export class Tinode {
   registerAccount(user: string, password: string, fn: string = ''): Promise<TinodeAuth> {
     const name = user.trim();
     if (name.length === 0) return Promise.reject('用户名不能为空');
+    if (!isValidBasicLogin(name)) return Promise.reject('用户名不能包含冒号');
     if (password.length < 6) return Promise.reject('密码至少 6 位');
     if (this.session.state() !== 'ready') {
       return Promise.reject('连接尚未就绪：请用 loginScheme 设为 none 启动，等 state() 变成 ready 后再注册');
@@ -297,7 +309,7 @@ export class Tinode {
     return new Promise<TinodeAuth>((resolve: (auth: TinodeAuth) => void, reject: (reason: string) => void) => {
       this.pendingAuth = resolve;
       this.pendingAuthReject = reject;
-      const id = this.session.createAccount('basic', `${name}:${password}`, fn);
+      const id = this.session.createAccount('basic', encodeBasicSecret(name, password), fn);
       if (id.length === 0) {
         this.pendingAuth = null;
         this.pendingAuthReject = null;
@@ -312,7 +324,7 @@ export class Tinode {
    */
   configurePasswordLogin(user: string, password: string): void {
     this.session.setLoginScheme('basic');
-    this.session.setToken(`${user.trim()}:${password}`);
+    this.session.setToken(encodeBasicSecret(user, password));
   }
 
   /** 重新配置登录凭据（换号/重新登录时用；下一次 `start()` 生效）。 */

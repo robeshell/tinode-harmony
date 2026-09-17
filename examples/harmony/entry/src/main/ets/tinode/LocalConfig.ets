@@ -13,9 +13,12 @@ export interface LocalTinodeConfig {
   token: string;
   topic: string;
   scheme: string;
+  /** demo 预填用的用户名/密码（可选；同样只在本地文件里）。 */
+  user: string;
+  password: string;
 }
 
-const EMPTY: LocalTinodeConfig = { wsUrl: '', apiKey: '', token: '', topic: '', scheme: 'token' };
+const EMPTY: LocalTinodeConfig = { wsUrl: '', apiKey: '', token: '', topic: '', scheme: 'token', user: '', password: '' };
 
 interface RawConfig {
   wsUrl?: string;
@@ -23,6 +26,8 @@ interface RawConfig {
   token?: string;
   topic?: string;
   scheme?: string;
+  user?: string;
+  password?: string;
 }
 
 export async function loadLocalConfig(context: common.UIAbilityContext): Promise<LocalTinodeConfig> {
@@ -35,7 +40,9 @@ export async function loadLocalConfig(context: common.UIAbilityContext): Promise
       apiKey: raw.apiKey ?? '',
       token: raw.token ?? '',
       topic: raw.topic ?? '',
-      scheme: raw.scheme ?? 'token'
+      scheme: raw.scheme ?? 'token',
+      user: raw.user ?? '',
+      password: raw.password ?? ''
     };
   } catch (error) {
     return EMPTY;

@@ -352,3 +352,31 @@ test('P3-min：configurePasswordLogin 在 start 之前切换 basic scheme', asyn
   assert.equal(login.login.scheme, 'basic');
   assert.equal(login.login.secret, Buffer.from('alice:pw123456', 'utf8').toString('base64'), 'basic secret = base64(user:password)');
 });
+
+// 回归：未认证时不得自动订阅 me（否则服务端回 401，被当致命错误把会话打成 failed）
+test('me 自动订阅必须等已认证（loginScheme:none 注册流程）', async () => {
+  const { Tinode } = await import('../src/Tinode.ts');
+  const { MemoryTinodeStorage } = await import('../src/TinodeStorage.ts');
+  const { defaultSessionConfig } = await import('../src/TinodeSession.ts');
+  const sent = [];
+  let handlers = null;
+  const transport = { open: (h) => { handlers = h; }, send: (t) => sent.push(t), close: () => { handlers = null; } };
+  const config = defaultSessionConfig('wss://im.example.com:6061/v0/channels', '', 'App/1.0', '');
+  config.loginScheme = 'none';
+  const facade = new Tinode({ transport, config, storage: new MemoryTinodeStorage(), hooks: {} });
+  facade.start(0);
+  handlers.onOpen(10);
+  handlers.onMessage(JSON.stringify({ ctrl: { id: '1', code: 200, params: { ver: '0.25' } } }), 20);
+  assert.equal(facade.state(), 'ready');
+  const meBefore = sent.map((f) => JSON.parse(f)).filter((f) => f.sub !== undefined && f.sub.topic === 'me');
+  assert.equal(meBefore.length, 0, '未认证时不能订阅 me');
+
+  // 注册成功（服务端签发凭据）→ 这时才订阅 me
+  const pending = facade.registerAccount('alice', 'pw123456', '爱丽丝');
+  const accFrame = sent.map((f) => JSON.parse(f)).find((f) => f.acc !== undefined);
+  handlers.onMessage(JSON.stringify({ ctrl: { id: accFrame.acc.id, code: 201, params: { user: 'usralice', token: 'tk' } } }), 30);
+  await pending;
+  const meAfter = sent.map((f) => JSON.parse(f)).filter((f) => f.sub !== undefined && f.sub.topic === 'me');
+  assert.equal(meAfter.length, 1, '拿到 uid 后订阅一次 me');
+  assert.equal(meAfter[0].sub.get.what, 'sub');
+});

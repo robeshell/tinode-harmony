@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+### 修复：`me` 自动订阅必须等已认证
+- `autoSubscribeMe` 之前在 `ready` 就订阅 `me`：**未认证**（`loginScheme:'none'` 的注册流程）时服务端回 **401**，
+  而 401 是致命错误 → 会话被打成 `failed`，随后的注册也失败。现在改为**拿到 uid 后**（登录/注册成功）才订阅，
+  并加了回归测试（未认证时不得出现 `sub{topic:"me"}`）。
+- 真机验证（示例 App，2026-09-17）：注册成功 → `凭据已签发 uid=usr…` → `主题 me 已订阅=true` → `ctrl 200/204`。
+
+### 示例：完整聊天 demo（`examples/harmony`）
+- 4 个视图：连接与账号（注册/密码登录/anonymous）/ 会话列表（名字/未读/在线/最后在线/权限摘要）/ 聊天（历史分页、富文本加粗斜体、附件校验与分块进度、已读、正在输入、撤回）/ **能力清单**（20 项能力 → API → 源码位置）；
+- 本地配置支持预填 `user`/`password`（仍只读 gitignored 的 `im.local.json`）；`sync-sdk.sh` 同步 SDK 源码。
+
 ### 修复：`basic` 的 secret 必须是 base64
 - `basic` 方案的 `secret` 是 **base64(`用户名:密码`)**（上游 `AuthScheme.encodeBasicToken:49-57`），不是明文 `用户名:密码`；
   之前的实现发的是明文 → 真机/真实服务端会回 **`400 malformed`**。新增纯函数 `encodeBasicSecret(user, password)` 与

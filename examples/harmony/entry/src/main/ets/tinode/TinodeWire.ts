@@ -182,6 +182,46 @@ export function buildAccCreate(id: string, scheme: string, secret: string, fn: s
 }
 
 /**
+ * `basic` 方案的 secret 编码：**base64(`用户名:密码`)**（上游 `AuthScheme.encodeBasicToken:49-57`）。
+ * 用户名里**不能有 `:`**（会破坏分隔）；违反时返回空串，调用方应据此报错。
+ * 自己实现 base64 是为了让纯逻辑层不依赖平台（`@kit.ArkTS` 的 `util.Base64Helper` 属平台 API）。
+ */
+export function encodeBasicSecret(user: string, password: string): string {
+  const name = user.trim();
+  if (name.length === 0 || name.indexOf(':') >= 0) return '';
+  const bytes: number[] = [];
+  const text = `${name}:${password}`;
+  for (let i = 0; i < text.length; i++) {
+    const code = text.charCodeAt(i);
+    if (code < 0x80) {
+      bytes.push(code);
+    } else if (code < 0x800) {
+      bytes.push(0xc0 | (code >> 6), 0x80 | (code & 0x3f));
+    } else {
+      bytes.push(0xe0 | (code >> 12), 0x80 | ((code >> 6) & 0x3f), 0x80 | (code & 0x3f));
+    }
+  }
+  const table = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 3) {
+    const b0 = bytes[i];
+    const b1 = i + 1 < bytes.length ? bytes[i + 1] : -1;
+    const b2 = i + 2 < bytes.length ? bytes[i + 2] : -1;
+    out += table.charAt(b0 >> 2);
+    out += table.charAt(((b0 & 0x03) << 4) | (b1 < 0 ? 0 : b1 >> 4));
+    out += b1 < 0 ? '=' : table.charAt(((b1 & 0x0f) << 2) | (b2 < 0 ? 0 : b2 >> 6));
+    out += b2 < 0 ? '=' : table.charAt(b2 & 0x3f);
+  }
+  return out;
+}
+
+/** `basic` 用户名是否合法（不能为空、不能含 `:`）——注册/登录前先校验，避免服务端 400 malformed。 */
+export function isValidBasicLogin(user: string): boolean {
+  const name = user.trim();
+  return name.length > 0 && name.indexOf(':') < 0;
+}
+
+/**
  * `acc` **更新**账号（P3 余项）：`user` 传要更新的 uid（见上游 `Tinode.java:1279` 的 `account(uid, …)`）。
  * - 改密：`scheme: 'basic'`，`secret: '用户名:新密码'`；
  * - 改公开名片：`fn` 非空时带上 `desc.public.fn`；
