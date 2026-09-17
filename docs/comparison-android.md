@@ -67,3 +67,51 @@
 
 > 对比用到的两边源码：Android 见 `android/app/src/main/java/com/otq/leakdetector/data/repository/TinodeImClient.kt`
 > 与 vendored `android/libs/tindroid/tinodesdk`；本 SDK 见 `src/`（行号在评审文档里）。
+
+---
+
+## 6. 更正与更直白的差距说明（2026-09-17 补充）
+
+上面第 1 节按"能力"对齐容易让人误读，这里把话说直白：**必须分两层看**。
+
+### 6.1 两个不同的比较对象
+
+| 层 | 安卓那边是什么 | 我们这边是什么 | 对齐情况 |
+| --- | --- | --- | --- |
+| **App 层**（界面与交互：附件面板、各类气泡、转发、搜索、设置、分享…） | `android/app/.../ui/screens/message` | `harmony/entry/src/main/ets/im` + `pages/ChatPage.ets` | ✅ **已逐项对齐**（16 条缺口清单全部完成，见宿主仓 `docs/16`/`docs/27`） |
+| **SDK 层**（协议客户端能力） | 官方 Java SDK `tindroid`（**64 个类**） | 本 SDK（**11 个源文件**） | ❌ **没有对齐**（见 6.2） |
+
+也就是说：**"功能对齐"这件事，之前做的是 App 层**；SDK 层是**刻意做薄**的协议层，不是官方 SDK 的对等替代品。
+
+### 6.2 SDK 层的能力差距（按官方 Java SDK 的类清单核对）
+
+| 能力 | 官方 Java SDK | tinode-harmony | 差距 |
+| --- | --- | --- | --- |
+| 账号（`MsgClientAcc`、`Credential`、`AuthScheme`） | ✅ | ❌ | 大 |
+| 主题生命周期（`Topic`/`MeTopic`/`FndTopic`/`ComTopic`、`MsgSetMeta`/`Sub`/`Desc`、自动重订阅、`NotSynchronizedException` 再同步） | ✅ | ❌（只发 `sub` 请求；重订阅由宿主） | **最大** |
+| 附件（`LargeFileHelper`：上传/下载/大文件分片） | ✅ | ❌ | 大 |
+| 推送（`MsgClientSet` + `setDeviceToken`） | ✅ | ❌（已移除） | 中 |
+| 本地存储/缓存与同步（`Storage`/`LocalData`） | ✅ | ⚠️ 只有端口，无缓存策略 | 中 |
+| 用户资料与权限（`User`/`Acs`/`Defacs`/`LastSeen`） | ✅ | ❌ | 中 |
+| 群组（通过 `ComTopic` + meta） | ✅ **SDK 支持** | ❌ | 大（但我们与安卓 App 都不用） |
+| Drafty | ✅ 读+写+格式化 | ⚠️ 读侧子集（`fmt` 不消费） | 中 |
+| presence/在线状态 | ✅ 模型化 | ⚠️ 只透传 `pres` 回调 | 小 |
+| 异步/重试框架（`PromisedReply`/`ExpBackoff`） | ✅ | ⚠️ 只有退避计算 | 小 |
+
+> 更正一处早期说法：官方 Java SDK **是支持群组和附件的**（`ComTopic` + `LargeFileHelper`）；"安卓客户端不做群组"指的是**安卓 App 没用到**这个能力，而不是 SDK 没有。
+
+### 6.3 补齐到"对等"的路线与量级（估算，供决策）
+
+| 阶段 | 内容 | 量级 |
+| --- | --- | --- |
+| P1 | **主题生命周期 + 自动重订阅 + 断线再同步**（把宿主那套 `subscribed`/重放收回 SDK） | 中（1–2 批） |
+| P2 | **附件模块**（上传/下载/大文件/缓存/进度，作为可选模块） | 大（2–3 批） |
+| P3 | **账号与凭据**（`acc`/`login` 全 scheme、`Credential`/`AuthScheme`） | 中（1 批） |
+| P4 | **本地存储与缓存策略**（`Storage`/`LocalData` 等价物 + 端口默认实现） | 中（1–2 批） |
+| P5 | **用户资料与权限**（`me`/`fnd` meta、`Acs`/`Defacs`、LastSeen） | 中（1–2 批） |
+| P6 | **Drafty 写侧 + `fmt`**（含与安卓的偏移语义对齐） | 中（1 批） |
+| P7 | **群组**（`grp` + 成员/权限） | 大（2–3 批） |
+| P8 | **推送**（等平台 Push Kit 真值 + AGC） | 小（受外部条件阻塞） |
+
+**结论（坦白说）**：现在的 SDK 只够"P2P 文本/自定义消息 + 宿主自管存储"这种用法；
+要对等官方 Java SDK，需要按上面 P1–P7 补齐 —— **这是个明确的工程量，不是几处补丁。**
