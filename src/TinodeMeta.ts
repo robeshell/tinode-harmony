@@ -39,6 +39,8 @@ export interface TinodeProfile {
   online: boolean;
   /** 最后活动时间（毫秒）。 */
   touchedAtMs: number;
+  /** 最后在线时间（毫秒；0 = 未知）。由 `pres{what:"off"|"gone"}` 更新。 */
+  lastSeenMs: number;
 }
 
 function normalizeSeq(value: number | undefined): number {
@@ -59,7 +61,8 @@ export function profileFromSub(sub: ImMetaSub, fallbackTopic?: string): TinodePr
     read: normalizeSeq(sub.read),
     recv: normalizeSeq(sub.recv),
     online: sub.online === true,
-    touchedAtMs: messageTsOf(sub.touched, 0)
+    touchedAtMs: messageTsOf(sub.touched, 0),
+    lastSeenMs: 0
   };
 }
 
@@ -98,7 +101,8 @@ export function mergeProfiles(known: TinodeProfile[], incoming: TinodeProfile[])
       recv: Math.max(old.recv, fresh.recv),
       // `online` 只有服务端明确下发时才覆盖（`meta` 里通常没有这个字段）。
       online: fresh.online ? true : old.online,
-      touchedAtMs: Math.max(old.touchedAtMs, fresh.touchedAtMs)
+      touchedAtMs: Math.max(old.touchedAtMs, fresh.touchedAtMs),
+      lastSeenMs: Math.max(old.lastSeenMs, fresh.lastSeenMs)
     });
   }
   const merged: TinodeProfile[] = [];
@@ -117,7 +121,9 @@ export function topicOfProfile(profile: TinodeProfile, previous?: TinodeTopic): 
     recv: profile.recv > 0 ? profile.recv : (previous === undefined ? 0 : previous.recv),
     online: profile.online,
     touchedAt: profile.touchedAtMs > 0 ? profile.touchedAtMs : (previous === undefined ? 0 : previous.touchedAt),
-    lastPreview: previous === undefined ? '' : previous.lastPreview
+    lastPreview: previous === undefined ? '' : previous.lastPreview,
+    lastSeenMs: profile.lastSeenMs > 0 ? profile.lastSeenMs
+      : (previous === undefined || previous.lastSeenMs === undefined ? 0 : previous.lastSeenMs)
   };
 }
 
@@ -130,6 +136,30 @@ export function displayNameOf(topic: string, contactName: string, publicFn: stri
   if (contactName.trim().length > 0) return contactName.trim();
   if (publicFn.trim().length > 0) return publicFn.trim();
   return topic;
+}
+
+/**
+ * 应用一条 `pres`（在线状态）：
+ * - `what === 'on'` → `online = true`；
+ * - `what === 'off' | 'gone' | 'rec'` → `online = false` 且用 `t`（ISO）记**最后在线**时间；
+ * 其它 `what`（如 `kp`/`upd`）不动状态，但仍刷新"最后活动时间"。
+ * 返回更新后的轮廓（不改原对象）。
+ */
+export function applyPresence(profile: TinodeProfile, what: string, t: string | undefined,
+  nowMs: number): TinodeProfile {
+  const next: TinodeProfile = {
+    topic: profile.topic, peerUid: profile.peerUid, name: profile.name, photo: profile.photo,
+    seq: profile.seq, read: profile.read, recv: profile.recv,
+    online: profile.online, touchedAtMs: Math.max(profile.touchedAtMs, nowMs), lastSeenMs: profile.lastSeenMs
+  };
+  if (what === 'on') {
+    next.online = true;
+  } else if (what === 'off' || what === 'gone' || what === 'rec') {
+    next.online = false;
+    const seen = messageTsOf(t, 0);
+    if (seen > 0) next.lastSeenMs = Math.max(profile.lastSeenMs, seen);
+  }
+  return next;
 }
 
 /** 会话列表排序：按最后活动时间倒序（相同则按 topic 稳定排序）。 */

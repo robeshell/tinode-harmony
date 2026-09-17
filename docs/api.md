@@ -73,6 +73,7 @@
 | `mergeProfiles(known, incoming)` | 增量合并：非空字段优先、位点取最大、时间取最新、不丢旧会话 |
 | `topicOfProfile(profile, previous?)` | 轮廓 → 端口模型 `TinodeTopic`（保留宿主的 `lastPreview`） |
 | `displayNameOf(topic, contactName, publicFn)` | **通讯录 → Tinode `public.fn` → topic** 三级兜底 |
+| `applyPresence(profile, what, t, nowMs)` | `pres` → 在线/离线 + `lastSeenMs`（`off`/`gone`/`rec` 记最后在线） |
 | `sortTopicsByActivity(topics)` | 会话列表按最后活动倒序 |
 
 门面侧：连上自动订阅 `me`（`autoSubscribeMe`）→ 收到 `meta` 自动落库并回调 `hooks.onTopics`。

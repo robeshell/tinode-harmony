@@ -71,3 +71,22 @@ test('displayNameOf 三级兜底与列表排序', () => {
   ];
   assert.deepEqual(sortTopicsByActivity(topics).map((t) => t.topic), ['usrA', 'usrC', 'usrB']);
 });
+
+// P5-min：pres 应用（在线 / 最后在线）
+test('applyPresence：on 置在线、off/gone 记最后在线、kp 只刷新活动时间', async () => {
+  const { applyPresence } = await import('../src/TinodeMeta.ts');
+  const base = profileFromSub(sub('usrA'));
+  const online = applyPresence(base, 'on', undefined, 1000);
+  assert.equal(online.online, true);
+  assert.equal(online.lastSeenMs, 0, 'on 不改最后在线');
+  const offline = applyPresence(online, 'off', '2026-09-17T02:00:00Z', 2000);
+  assert.equal(offline.online, false);
+  assert.ok(offline.lastSeenMs > 0, 'off 记录最后在线');
+  assert.equal(base.online, false, '不改原对象');
+  const later = offline.touchedAtMs + 5000;      // 必须晚于名片里的 touched，否则按"不倒退"语义保持原值
+  const typing = applyPresence(offline, 'kp', undefined, later);
+  assert.equal(typing.online, false, 'kp 不改在线状态');
+  assert.equal(typing.touchedAtMs, later, 'kp 刷新活动时间');
+  assert.equal(applyPresence(offline, 'kp', undefined, 10).touchedAtMs, offline.touchedAtMs, '更早的时间不倒退');
+  assert.equal(typing.lastSeenMs, offline.lastSeenMs);
+});

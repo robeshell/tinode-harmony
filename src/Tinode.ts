@@ -17,7 +17,7 @@
 import type { ImHead } from './TinodeHead.ts';
 import type { Drafty } from './Drafty.ts';
 import type { TinodeTopicState } from './TinodeTopics.ts';
-import { mergeProfiles, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
+import { applyPresence, mergeProfiles, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
 import type { TinodeProfile } from './TinodeMeta.ts';
 import type { TinodeAuth } from './TinodeSession.ts';
 import { ImSession, defaultSessionConfig } from './TinodeSession.ts';
@@ -144,6 +144,7 @@ export class Tinode {
         if (done !== undefined) done(info);
       },
       onPres: (pres: ImPres) => {
+        this.absorbPresence(pres);                // P5-min：在线/最后在线
         const done = this.hooks.onPres;
         if (done !== undefined) done(pres);
       },
@@ -213,6 +214,37 @@ export class Tinode {
   start(nowMs: number): void { this.session.start(nowMs); }
   tick(nowMs: number): void { this.session.tick(nowMs); }
   stop(): void { this.session.stop(); }
+  /**
+   * P5-min：把一条 `pres`（在线状态）应用到已知轮廓：`on` → 在线；`off`/`gone`/`rec` → 离线 + 记**最后在线**时间。
+   * 没见过的 topic（还没收到 `meta`）先建一条骨架，保证 `onTopics` 拿到完整列表。
+   */
+  private absorbPresence(pres: ImPres): void {
+    const topic = pres.topic === undefined ? '' : pres.topic.trim();
+    if (topic.length === 0) return;
+    const what = pres.what === undefined ? '' : pres.what;
+    const known = this.profilesByTopic.get(topic);
+    const base: TinodeProfile = known === undefined
+      ? {
+        topic: topic, peerUid: topic, name: '', photo: '', seq: 0, read: 0, recv: 0,
+        online: false, touchedAtMs: 0, lastSeenMs: 0
+      }
+      : known;
+    const updated = applyPresence(base, what, pres.t, Date.now());
+    this.profilesByTopic.set(topic, updated);
+    const nextTopic = topicOfProfile(updated, this.topicsByTopic.get(topic));
+    this.topicsByTopic.set(topic, nextTopic);
+    this.store.upsertTopic(nextTopic).catch((error: Object) => {
+      tinodeLogDetail('tinode', `upsertTopic(pres) failed for ${redactTopic(topic)}`, 'error');
+    });
+    const rows: TinodeTopic[] = [];
+    this.profilesByTopic.forEach((profile: TinodeProfile) => {
+      const cached = this.topicsByTopic.get(profile.topic);
+      if (cached !== undefined) rows.push(cached);
+    });
+    const done = this.hooks.onTopics;
+    if (done !== undefined) done(sortTopicsByActivity(rows));
+  }
+
   /**
    * P5-min：把一条 `meta` 里的 `sub[]` 合并成会话列表，落库并回调 `hooks.onTopics`。
    * 纯逻辑在 `TinodeMeta.ts`（`profilesFromMeta` / `mergeProfiles` / `topicOfProfile`）。

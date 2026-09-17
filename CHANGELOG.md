@@ -19,6 +19,7 @@
   `topicOfProfile`（→ 端口模型 `TinodeTopic`）、`displayNameOf`（**通讯录 → `public.fn` → topic** 三级兜底）、`sortTopicsByActivity`；
 - 门面：连上后**自动订阅 `me`**（`autoSubscribeMe`，默认开）→ 收到 `meta` 自动合并成**会话列表**、落库（`storage.upsertTopic`）
   并回调 **`hooks.onTopics`**；新增 `profiles()` / `profileOf(topic)` / `rememberTopic(topic)`；
+- **在线状态**：`pres` 自动应用到轮廓 —— `on` → 在线；`off`/`gone`/`rec` → 离线并记录 **`lastSeenMs`（最后在线）**；`TinodeTopic.lastSeenMs` 为**可选**新增字段（宿主老实现不受影响）；
 - 效果：宿主不再需要自己写"从 meta 取名字/头像/未读"这一层（我们自己的 App 之前写了 446 行的 `ImConversation.ts`）。
 
 ## [0.1.0] - 2026-09-17

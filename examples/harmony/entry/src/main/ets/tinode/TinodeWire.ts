@@ -375,8 +375,13 @@ export interface ImMeta {
 export interface ImPres {
   topic: string;
   src?: string;
+  /** `on` | `off` | `gone` | `rec` … */
   what?: string;
   ua?: string;
+  /** 事件时间（Tinode 用 ISO 字符串）：`off`/`gone` 时就是**最后在线**时间。 */
+  t?: string;
+  /** 事件序号（部分部署会带）。 */
+  seq?: number;
 }
 
 /** 一条服务端报文（一次只带其中一个键；`extra` 忽略）。 */

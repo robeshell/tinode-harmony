@@ -44,6 +44,8 @@ export interface TinodeTopic {
   online: boolean;
   touchedAt: number;
   lastPreview: string;
+  /** 最后在线时间（毫秒，0 表示未知）；`pres{what:"off"|"gone"}` 时更新。**可选**字段，宿主老实现不受影响。 */
+  lastSeenMs?: number;
 }
 
 /** 草稿（`topic → text`；宿主自己决定存哪）。 */
