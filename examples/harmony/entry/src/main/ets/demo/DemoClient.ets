@@ -19,10 +19,12 @@ import {
   ImSessionConfig, ImSessionState, MemoryTinodeStorage, StorageCacheStats, Tinode, TinodeAuth, TinodeHooks,
   TinodeMessage, TinodeOptions, TinodeProfile, TinodeSubscribeOptions, TinodeTopic, TinodeTopicState,
   acsSummary, attachmentDrafty,
-  cacheKeyOf, defaultSessionConfig, DelRange, draftyLink, draftyWithEntity, draftyPlain, draftySegments, draftyWithStyle, parseDraftyJson, planChunks,
+  cacheKeyOf, defaultSessionConfig, DelRange, draftyLink, draftyWithEntity, attachmentUploadUrl, uploadedRefOf, draftyPlain, draftySegments, draftyWithStyle, parseDraftyJson, planChunks,
   progressPercent, validateAttachment
 } from '../tinode/Index.ts';
 import { TinodeSocket } from '../tinode/Socket.ets';
+import { HarmonyAttachmentHttp } from '../tinode/TinodeAttachmentHttp.ets';
+import { PickedFile, RecordedVoice } from './DemoPickers';
 
 /** 页面展示用的一条消息（把线路消息 + 富文本片段合在一起）。 */
 export interface DemoMessage {
@@ -73,6 +75,9 @@ export class DemoClient {
   private accessByTopic: Map<string, string> = new Map();
   private messagesByTopic: Map<string, DemoMessage[]> = new Map();
   private currentTopic: string = '';
+  private apiKey: string = '';
+  private serverBase: string = '';
+  private authToken: string = '';
 
   constructor(listener: DemoListener) {
     this.listener = listener;
@@ -82,6 +87,8 @@ export class DemoClient {
   connect(wsUrl: string, apiKey: string, appName: string = 'tinode-harmony-demo/0.1.0'): void {
     this.disconnect();
     this.transport = new TinodeSocket(wsUrl, apiKey);
+    this.apiKey = apiKey;
+    this.serverBase = DemoClient.httpBaseOf(wsUrl);
     // 会话配置：先用 SDK 的默认值构造，再按 demo 需要覆盖（类型明确，避免 ArkTS 无类型字面量）
     const sessionConfig: ImSessionConfig = defaultSessionConfig(wsUrl, '', appName, '');
     sessionConfig.loginScheme = 'none';        // 先连上，再注册或登录
@@ -101,7 +108,10 @@ export class DemoClient {
       onInfo: (info: ImInfo) => this.listener.onLog(`info ${info.topic}`),
       onCtrl: (ctrl: ImCtrl) => this.listener.onLog(`ctrl code=${ctrl.code}`),
       onFailure: (text: string) => this.listener.onState('failed', text),
-      onAuth: (auth: TinodeAuth) => this.listener.onLog(`凭据已签发 uid=${auth.uid}`)
+      onAuth: (auth: TinodeAuth) => {
+        this.authToken = auth.token;                       // 附件上传要带 token（HTTP 侧不是 WS 会话）
+        this.listener.onLog(`凭据已签发 uid=${auth.uid}`);
+      }
     };
     const options: TinodeOptions = {
       transport: this.transport,
@@ -148,6 +158,115 @@ export class DemoClient {
     // basic secret 由 SDK 负责 base64 编码
     client.configurePasswordLogin(user, password);
     client.start(Date.now());
+  }
+
+  /** 附件上传要带的头：apikey（服务端要求时）+ 登录 token（`file/u` 需要已认证身份）。 */
+  private uploadHeaders(): Record<string, string> {
+    const headers: Record<string, string> = {};
+    if (this.apiKey.length > 0) headers['X-Tinode-APIKey'] = this.apiKey;
+    if (this.authToken.length > 0) headers['X-Tinode-Auth'] = this.authToken;
+    return headers;
+  }
+
+  /** 由 ws(s) 端点推导 http(s) 基地址（附件上传用；推导不出返回空串走"仅本地 ref"路径）。 */
+  private static httpBaseOf(wsUrl: string): string {
+    const text = wsUrl.trim();
+    if (text.startsWith('wss://')) return `https://${text.slice(6).split('/')[0]}`;
+    if (text.startsWith('ws://')) return `http://${text.slice(5).split('/')[0]}`;
+    return '';
+  }
+
+  /**
+   * 发送 picker 选中的图片/文件：SDK 侧做校验 → 分块规划 → （可选）真上传 → 发布实体消息。
+   * 上传走 `HarmonyAttachmentHttp`（**未真机验证**）；未配置服务端基地址或上传失败时退回本地 ref，并如实打日志。
+   */
+  async sendPickedFile(file: PickedFile, bytes: Uint8Array | null): Promise<void> {
+    const client = this.tinode;
+    if (client === null || this.currentTopic.length === 0) {
+      this.listener.onUploadProgress(0, '先打开一个会话');
+      return;
+    }
+    const check = validateAttachment({ name: file.name, mime: file.mime, size: file.size });
+    if (!check.ok) {
+      this.listener.onUploadProgress(0, check.reason);
+      return;
+    }
+    const chunks = planChunks(file.size);
+    this.listener.onUploadProgress(0, `准备上传 ${file.name}（${chunks.length} 块）`);
+    let ref = '';
+    let url: string | undefined = undefined;
+    if (bytes !== null && this.serverBase.length > 0) {
+      this.listener.onUploadProgress(5, `上传中 ${file.name}`);
+      const http = new HarmonyAttachmentHttp();
+      const target = attachmentUploadUrl(this.serverBase);
+      const response = await http.upload({
+        url: target,
+        headers: this.uploadHeaders(),
+        fieldName: 'file',
+        fileName: file.name,
+        mime: file.mime,
+        bytes: bytes.buffer as ArrayBuffer,
+        topic: this.currentTopic
+      }, (loaded: number, total: number) => {
+        this.listener.onUploadProgress(progressPercent(loaded, total), `上传 ${file.name}`);
+      });
+      const parsed = uploadedRefOf(response.body);
+      if (parsed === null) {
+        this.listener.onUploadProgress(0, `上传失败（HTTP ${response.status}），退回本地 ref`);
+        ref = cacheKeyOf(file.uri, file.mime);
+      } else {
+        ref = parsed.ref;
+        url = parsed.url;
+        this.listener.onUploadProgress(100, `上传完成 ${file.name}`);
+      }
+    } else {
+      ref = cacheKeyOf(file.uri, file.mime);
+      this.listener.onUploadProgress(100, bytes === null ? `${file.name}：内容过大未读取，仅发元数据` : `${file.name}：未配置上传地址，仅发本地 ref`);
+    }
+    const drafty = attachmentDrafty(
+      { name: file.name, mime: file.mime, size: file.size }, { ref: ref, url: url }, file.name);
+    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    this.listener.onLog(`附件消息已发送 ${file.name}（${file.mime} / ${file.size}B / ref=${ref.slice(0, 12)}…）`);
+  }
+
+  /** 发送录到的语音（PCM/WAV 元数据；真上传同样走附件 HTTP）。 */
+  async sendVoice(voice: RecordedVoice): Promise<void> {
+    const client = this.tinode;
+    if (client === null || this.currentTopic.length === 0) return;
+    const name = `voice-${Date.now()}.wav`;
+    const check = validateAttachment({ name: name, mime: 'audio/wav', size: voice.bytes.length });
+    if (!check.ok) {
+      this.listener.onUploadProgress(0, check.reason);
+      return;
+    }
+    let ref = cacheKeyOf(name, 'audio/wav');
+    let url: string | undefined = undefined;
+    if (this.serverBase.length > 0) {
+      const http = new HarmonyAttachmentHttp();
+      const response = await http.upload({
+        url: attachmentUploadUrl(this.serverBase),
+        headers: this.uploadHeaders(),
+        fieldName: 'file',
+        fileName: name,
+        mime: 'audio/wav',
+        bytes: voice.bytes.buffer as ArrayBuffer,
+        topic: this.currentTopic
+      }, (loaded: number, total: number) => {
+        this.listener.onUploadProgress(progressPercent(loaded, total), '上传语音');
+      });
+      const parsed = uploadedRefOf(response.body);
+      if (parsed !== null) {
+        ref = parsed.ref;
+        url = parsed.url;
+      } else {
+        this.listener.onUploadProgress(0, `语音上传失败（HTTP ${response.status}），仅发元数据`);
+      }
+    }
+    const drafty = attachmentDrafty(
+      { name: name, mime: 'audio/wav', size: voice.bytes.length, duration: voice.durationMs },
+      { ref: ref, url: url }, name);
+    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    this.listener.onLog(`语音已发送 ${voice.durationMs}ms / ${voice.bytes.length}B`);
   }
 
   /** 自己的 uid（注册/登录后才有）。 */

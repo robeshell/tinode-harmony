@@ -10,6 +10,14 @@
   并加了回归测试（未认证时不得出现 `sub{topic:"me"}`）。
 - 真机验证（示例 App，2026-09-17）：注册成功 → `凭据已签发 uid=usr…` → `主题 me 已订阅=true` → `ctrl 200/204`。
 
+### 示例：系统 picker 与麦克风录音
+- `examples/harmony/entry/src/main/ets/demo/DemoPickers.ets`：图片（`photoAccessHelper.PhotoViewPicker`）、文件（`picker.DocumentViewPicker`）、
+  麦克风录音（`@kit.AudioKit` 的 `AudioCapturer`，16 kHz/单声道/S16LE，照宿主 App 已真机验证的写法）与 S16LE 电平计算；
+- 聊天页新增「选图 / 选文件 / 按住说话」；录音期间显示电平、松开发送 `AU` 实体消息（含 `duration`），页面销毁释放麦克风；
+- `module.json5` 声明 `ohos.permission.MICROPHONE`（user_grant，含 `reason`/`usedScene`），首次使用时弹系统授权框；
+- 真机验证：系统图片 picker 能打开 ✓、麦克风授权弹窗显示自定义说明 ✓、录音得到 PCM（1494 ms / 43520 B）✓；
+  附件上传带 `X-Tinode-Auth` token，但该部署的 `file/u` 仍回 **401** → demo 退回"仅元数据"并在界面如实提示（**上传成功路径未验证**）。
+
 ### 示例：完整聊天 demo（`examples/harmony`）
 - 4 个视图：连接与账号（注册/密码登录/anonymous）/ 会话列表（名字/未读/在线/最后在线/权限摘要）/ 聊天（历史分页、富文本加粗斜体、附件校验与分块进度、已读、正在输入、撤回）/ **能力清单**（20 项能力 → API → 源码位置）；
 - 本地配置支持预填 `user`/`password`（仍只读 gitignored 的 `im.local.json`）；`sync-sdk.sh` 同步 SDK 源码。

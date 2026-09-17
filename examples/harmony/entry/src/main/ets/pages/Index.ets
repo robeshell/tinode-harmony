@@ -9,6 +9,9 @@
 import { common } from '@kit.AbilityKit';
 import { DemoClient, DemoConversation, DemoListener, DemoMessage } from '../demo/DemoClient';
 import { DraftySegment } from '../tinode/Index.ts';
+import {
+  DemoVoiceRecorder, PickedFile, RecordedVoice, ensureMicPermission, pickDocument, pickImage, readUriBytes
+} from '../demo/DemoPickers';
 import { loadLocalConfig, LocalTinodeConfig } from '../tinode/LocalConfig';
 
 const CAPABILITIES: string[][] = [
@@ -56,6 +59,10 @@ struct Index {
   @Local topicInput: string = '';
   @Local myUid: string = '';
   @Local cacheLine: string = '';
+  @Local pickedNote: string = '';
+  @Local voiceLevel: number = 0;
+  @Local recording: boolean = false;
+  private recorder: DemoVoiceRecorder = new DemoVoiceRecorder();
   private client: DemoClient | null = null;
 
   aboutToAppear(): void {
@@ -78,8 +85,67 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    this.recorder.release();                 // 释放麦克风，避免离开页面后还占着
     const client = this.client;
     if (client !== null) client.disconnect();
+  }
+
+  /** 选图片（系统图库 picker）→ 交给 SDK 校验/分块/（可选）上传 → 发消息。 */
+  private pickAndSendImage(): void {
+    pickImage().then((file: PickedFile) => {
+      this.pickedNote = `已选图：${file.name}（${file.size}B）`;
+      const bytes = readUriBytes(file.uri, 8 * 1024 * 1024);
+      const client = this.clientOrNull();
+      if (client !== null) return client.sendPickedFile(file, bytes);
+      return undefined;
+    }).catch(() => { this.pickedNote = '已取消选择图片'; });
+  }
+
+  /** 选文件（系统文件 picker）。 */
+  private pickAndSendDocument(): void {
+    pickDocument().then((file: PickedFile) => {
+      this.pickedNote = `已选文件：${file.name}（${file.size}B）`;
+      const bytes = readUriBytes(file.uri, 8 * 1024 * 1024);
+      const client = this.clientOrNull();
+      if (client !== null) return client.sendPickedFile(file, bytes);
+      return undefined;
+    }).catch(() => { this.pickedNote = '已取消选择文件'; });
+  }
+
+  /** 按下开始录音（先申请麦克风权限）。 */
+  private startRecording(): void {
+    const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    ensureMicPermission(context).then((granted: boolean) => {
+      if (!granted) { this.pickedNote = '没有麦克风权限：无法录音'; return; }
+      this.recorder.start().then((ok: boolean) => {
+        this.recording = ok;
+        this.pickedNote = ok ? '正在录音…（松开手指发送）' : '录音启动失败';
+        if (ok) this.startLevelTimer();
+      });
+    });
+  }
+
+  /** 轮询电平（录音期间的简单可视化）。 */
+  private startLevelTimer(): void {
+    const timer = setInterval(() => {
+      if (!this.recording) { clearInterval(timer); return; }
+      this.voiceLevel = this.recorder.level();
+    }, 120);
+  }
+
+  /** 松开：发送语音；上滑/取消：丢弃。 */
+  private stopRecording(send: boolean): void {
+    if (!this.recording) return;
+    this.recording = false;
+    const pending = send ? this.recorder.stop() : this.recorder.cancel().then(() => null);
+    pending.then((voice: RecordedVoice | null) => {
+      this.voiceLevel = 0;
+      if (voice === null) { this.pickedNote = send ? '录音太短，已取消' : '已取消录音'; return; }
+      this.pickedNote = `语音 ${voice.durationMs}ms / ${voice.bytes.length}B`;
+      const client = this.clientOrNull();
+      if (client !== null) return client.sendVoice(voice);
+      return undefined;
+    });
   }
 
   private append(line: string): void {
@@ -202,6 +268,18 @@ struct Index {
           if (c !== null && this.messages.length > 0) c.sendQuote('引用一下', this.messages[this.messages.length - 1].seq);
         })
       }
+      Row({ space: 6 }) {
+        Button('选图').onClick(() => { this.pickAndSendImage(); })
+        Button('选文件').onClick(() => { this.pickAndSendDocument(); })
+        Button(this.recording ? `松开发送 ${this.voiceLevel}%` : '按住说话')
+          .backgroundColor(this.recording ? '#D0D4DD' : undefined)
+          .onTouch((event: TouchEvent) => {
+            if (event.type === TouchType.Down) this.startRecording();
+            else if (event.type === TouchType.Up) this.stopRecording(true);
+            else if (event.type === TouchType.Cancel) this.stopRecording(false);
+          })
+      }
+      Text(this.pickedNote).fontSize(11)
       Text(this.uploadNote.length > 0 ? `${this.uploadNote}（${this.uploadPercent}%）` : '').fontSize(11)
       Text(this.cacheLine).fontSize(10)
       List({ space: 4 }) {

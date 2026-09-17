@@ -22,7 +22,13 @@
       }
     ],
     "requestPermissions": [
-      { "name": "ohos.permission.INTERNET" }
+      { "name": "ohos.permission.INTERNET" },
+      {
+        // 示例 App 的「按住说话」用手机麦克风录音（user_grant：首次使用时弹系统授权框）
+        "name": "ohos.permission.MICROPHONE",
+        "reason": "$string:microphone_reason",
+        "usedScene": { "abilities": ["EntryAbility"], "when": "inuse" }
+      }
     ]
   }
 }
