@@ -16,5 +16,5 @@ export * from './TinodeLog.ts';
 export * from './TinodeMessage.ts';
 export * from './TinodeStorage.ts';
 export * from './TinodeTopics.ts';
-export * from './ImAttachment.ts';
+export * from './TinodeAttachment.ts';
 export * from './Tinode.ts';

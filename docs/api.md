@@ -40,7 +40,7 @@
 | `open(handlers)` / `send(text)` / `close()` | 未就绪时 `send` 会回调 `handlers.onError`，不静默丢 |
 | `isOpen()` | 仅表示"已连上"，**不代表已认证** |
 
-## 附件（`ImAttachment.ts`，P2 可选模块）
+## 附件（`TinodeAttachment.ts`，P2 可选模块）
 
 | 函数 | 作用 |
 | --- | --- |

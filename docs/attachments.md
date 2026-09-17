@@ -5,10 +5,10 @@
 
 | 部分 | 位置 | 要不要用 |
 | --- | --- | --- |
-| **纯逻辑**：校验、分块规划、进度合并、缓存键与 LRU 淘汰、Drafty 实体互转 | `src/ImAttachment.ts`（无 IO、无平台依赖） | 都可用（纯函数，直接单测） |
-| **平台传输**：真正发 HTTP | `src/AttachmentHttp.ets`（HarmonyOS `@kit.NetworkKit`） | 只有需要 SDK 代你上传/下载时才用；宿主已有自己的文件接口（例如你们后端）就**不需要** |
+| **纯逻辑**：校验、分块规划、进度合并、缓存键与 LRU 淘汰、Drafty 实体互转 | `src/TinodeAttachment.ts`（无 IO、无平台依赖） | 都可用（纯函数，直接单测） |
+| **平台传输**：真正发 HTTP | `src/TinodeAttachmentHttp.ets`（HarmonyOS `@kit.NetworkKit`） | 只有需要 SDK 代你上传/下载时才用；宿主已有自己的文件接口（例如你们后端）就**不需要** |
 
-> ⚠️ `AttachmentHttp.ets` **尚未真机验证过上传/下载**（我们自己的 App 走的是后端附件接口）。首次使用请先在一个小工程里跑通再上线。
+> ⚠️ `TinodeAttachmentHttp.ets` **尚未真机验证过上传/下载**（我们自己的 App 走的是后端附件接口）。首次使用请先在一个小工程里跑通再上线。
 
 ## 1. 走 Tinode 原生文件接口（对外发布推荐）
 
@@ -35,7 +35,7 @@ session.sendPub('usrXXXXXX', null, attachmentDrafty(meta, ref));   // 消息里�
 
 ## 2. 走自己的后端（我们 App 的做法）
 
-后端接口返回 `url`/`ref` 后，**只用纯逻辑**把它包成消息即可，不需要 `AttachmentHttp.ets`：
+后端接口返回 `url`/`ref` 后，**只用纯逻辑**把它包成消息即可，不需要 `TinodeAttachmentHttp.ets`：
 
 ```ts
 const ref = { ref: uploadedId, url: downloadUrl };
@@ -60,6 +60,6 @@ const doomed = planEviction(entries, 256 * 1024 * 1024);  // 超预算时该删�
 
 ## 4. 已知边界
 
-- 上传**分块**目前只做到"规划 + 进度"；把块真正并发/续传发出去由宿主（或后续把 `chunked upload` 补进 `AttachmentHttp.ets`）；
+- 上传**分块**目前只做到"规划 + 进度"；把块真正并发/续传发出去由宿主（或后续把 `chunked upload` 补进 `TinodeAttachmentHttp.ets`）；
 - 下载返回正文文本；二进制落盘/解码（如写沙箱、生成缩略图）由宿主负责；
 - 未做：断点续传、秒传（同一 `ref` 去重已有 `cacheKeyOf` 可用）、图片压缩/转码。

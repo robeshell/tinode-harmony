@@ -4,7 +4,7 @@ import {
   DEFAULT_ATTACHMENT_CHUNK_BYTES, attachmentDrafty, attachmentKindOf, attachmentOfDrafty, cacheBytesOf,
   cacheKeyOf, draftyEntityTypeOf, initialProgress, isUploadComplete, mergeChunkProgress, planChunks,
   planEviction, progressPercent, uploadedBytesOf, validateAttachment
-} from '../src/ImAttachment.ts';
+} from '../src/TinodeAttachment.ts';
 
 // P2：附件模块纯逻辑（校验 / 分块 / 进度 / 缓存 / Drafty 互转）
 test('MIME 归类与 Drafty 实体类型', () => {

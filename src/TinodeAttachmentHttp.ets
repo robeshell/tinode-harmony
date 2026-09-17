@@ -9,14 +9,14 @@
  * 附件传输的**平台实现**（HarmonyOS：`@kit.NetworkKit` 的 HTTP）。
  *
  * 这是 P2 的可选模块：只有用到上传/下载的宿主才需要它。核心逻辑（分块、进度、缓存、Drafty 互转）
- * 都在纯逻辑文件 `ImAttachment.ts` 里，本文件只负责"把字节按 HTTP 发出去"。
+ * 都在纯逻辑文件 `TinodeAttachment.ts` 里，本文件只负责"把字节按 HTTP 发出去"。
  *
  * ⚠️ 本文件**未在真机上跑过上传/下载**（宿主 App 目前走自己的后端附件接口）——
  *    使用前请先用 `examples/harmony` 或自己的工程验证一次。
  */
 import { http } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import type { AttachmentHttpResult, AttachmentTransferPort, AttachmentUploadRequest } from './ImAttachment.ts';
+import type { AttachmentHttpResult, AttachmentTransferPort, AttachmentUploadRequest } from './TinodeAttachment.ts';
 import { tinodeLogDetail } from './TinodeLog.ts';
 
 export class HarmonyAttachmentHttp implements AttachmentTransferPort {
@@ -70,9 +70,14 @@ export class HarmonyAttachmentHttp implements AttachmentTransferPort {
           onProgress(info.receiveSize, info.totalSize);
         });
       }
+      const header: Record<string, string> = {};
+      if (headers !== undefined) {
+        const keys = Object.keys(headers);
+        for (let i = 0; i < keys.length; i++) header[keys[i]] = headers[keys[i]];
+      }
       const options: http.HttpRequestOptions = {
         method: http.RequestMethod.GET,
-        header: headers === undefined ? {} : headers,
+        header: header,
         connectTimeout: 30000,
         readTimeout: 120000
       };

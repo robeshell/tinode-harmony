@@ -44,8 +44,8 @@ tinode.publish('usrXXXXXX', { txt: 'hi' });
 **做**（P1 起）：**主题生命周期** —— SDK 记住每个会话的订阅意图与位点（`lastSeq`/`read`/`recv`），
 断线重连后**自动重新订阅**并可从 `lastSeq+1` 补历史；宿主可读 `knownTopics()/topicState()` 或监听 `onTopicState`。
 
-**做**（P2，可选模块）：**附件** —— 纯逻辑（校验/分块规划/进度/缓存键与 LRU 淘汰/Drafty 实体互转）在 `src/ImAttachment.ts`，
-平台 HTTP 在 `src/AttachmentHttp.ets`（只有需要 SDK 代传文件时才用；走自己后端的宿主只用纯逻辑）。
+**做**（P2，可选模块）：**附件** —— 纯逻辑（校验/分块规划/进度/缓存键与 LRU 淘汰/Drafty 实体互转）在 `src/TinodeAttachment.ts`，
+平台 HTTP 在 `src/TinodeAttachmentHttp.ets`（只有需要 SDK 代传文件时才用；走自己后端的宿主只用纯逻辑）。
 
 **不做**（有意留白）：群组（`grp`）、推送（`set{what:"deviceToken"}`）、
 业务语义（送达状态、置顶、草稿策略）——这些留在宿主应用层。
