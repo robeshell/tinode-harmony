@@ -7,7 +7,7 @@
 
 import { webSocket } from '@kit.NetworkKit';
 import { BusinessError } from '@kit.BasicServicesKit';
-import { redactError, tinodeLogFailure } from './TinodeLog.ts';
+import { redactError, tinodeLogDetail, tinodeLogFailure } from './TinodeLog.ts';
 import { IM_HEADER_API_KEY } from './TinodeWire';
 import type { ImTransport, ImTransportHandlers } from './TinodeSession';
 
@@ -65,7 +65,8 @@ export class TinodeSocket implements ImTransport {
         if (refused !== null) refused.onError('已禁止明文连接（allowInsecure=false），请改用 wss://', Date.now());
         return;
       }
-      tinodeLogFailure('im/socket', new Error('明文 ws:// 连接：凭据将不经 TLS 传输（如需禁止请设 allowInsecure=false）'));
+      // 这是**告警**不是失败：走 detail 通道（level=warn），避免宿主把它渲染成"失败"。
+      tinodeLogDetail('im/socket', '明文 ws:// 连接：凭据将不经 TLS 传输（如需禁止请设 allowInsecure=false）', 'warn');
     }
     // **审计 P1-4**：重复 open 必须先把上一只 socket 关掉并解绑，否则旧回调仍活着、socket 泄漏。
     this.close();

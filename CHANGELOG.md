@@ -21,6 +21,10 @@
   实现不正确的方法比没有更糟）、移除 `rawSession()`/`nextRequestId()` 这类内部方法。
 - **归属声明**：新增 `NOTICE`，逐文件补许可头。
 
+### 日志
+- 明文 `ws://` 的提示走 **detail（level=warn）**，不再经 failure 通道（宿主不会把它渲染成"失败"）；
+  真正需要拒绝明文时用 `new TinodeSocket(url, apiKey, false)`。
+
 ### 公开 API 口径
 - **有 id 的请求**（`subscribe/publish/history/deleteTopic/deleteMessages`）返回**报文 id**，未就绪或参数非法返回 `''`，失败原因统一走 `onFailure`；
 - **note / leave**（协议里没有 id）返回 **`boolean`（是否已发出）**；
