@@ -1,0 +1,7 @@
+{
+  "modelVersion": "5.0.0",
+  "name": "tinode-harmony-example",
+  "version": "0.1.0",
+  "description": "tinode-harmony SDK 的 HarmonyOS 示例工程",
+  "dependencies": {}
+}

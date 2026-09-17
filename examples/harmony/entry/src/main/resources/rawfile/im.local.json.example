@@ -1,0 +1,7 @@
+{
+  "wsUrl": "wss://im.example.com:6061/v0/channels",
+  "apiKey": "YOUR_API_KEY",
+  "token": "YOUR_LOGIN_TOKEN",
+  "topic": "",
+  "scheme": "token"
+}

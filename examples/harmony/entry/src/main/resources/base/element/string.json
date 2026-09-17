@@ -1,0 +1,7 @@
+{
+  "string": [
+    { "name": "module_desc", "value": "tinode-harmony 示例模块" },
+    { "name": "ability_desc", "value": "示例能力" },
+    { "name": "ability_label", "value": "Tinode 示例" }
+  ]
+}

@@ -4,3 +4,7 @@ build/
 *.har
 .DS_Store
 .idea/
+examples/node/config.local.json
+.env
+*.local.json
+!.env.example

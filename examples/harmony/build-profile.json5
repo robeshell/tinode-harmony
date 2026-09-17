@@ -1,0 +1,22 @@
+{
+  "app": {
+    // 示例工程**不提交任何签名材料**：需要真机安装时，用 DevEco 打开本目录并自动签名（或自己补 signingConfigs）。
+    "signingConfigs": [],
+    "products": [
+      {
+        "name": "default",
+        "signingConfig": "default",
+        "compatibleSdkVersion": "5.0.0(12)",
+        "runtimeOS": "HarmonyOS"
+      }
+    ],
+    "buildModeSet": [{ "name": "debug" }, { "name": "release" }]
+  },
+  "modules": [
+    {
+      "name": "entry",
+      "srcPath": "./entry",
+      "targets": [{ "name": "default", "applyToProducts": ["default"] }]
+    }
+  ]
+}

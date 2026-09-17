@@ -16,6 +16,22 @@ tinode.subscribe('usrXXXXXX');                  // desc + sub，最近 24 条
 tinode.publish('usrXXXXXX', { txt: 'hi' });
 ```
 
+## 文档与示例
+
+| 想做的事 | 看这里 |
+| --- | --- |
+| 先跑起来（HarmonyOS / Node / HAR / 源码） | [docs/getting-started.md](./docs/getting-started.md) |
+| **把 SDK 指向我的 Tinode 服务**（wsUrl / apikey / token / scheme / 明文与 TLS / 自建服务） | [docs/configuration.md](./docs/configuration.md) |
+| 逐方法签名、返回与失败口径 | [docs/api.md](./docs/api.md) |
+| 分层、状态机、三个端口、两种门面模式 | [docs/architecture.md](./docs/architecture.md) |
+| 凭据怎么处理、**为什么不要提交真实地址与密钥** | [docs/security.md](./docs/security.md) |
+| 连不上/403/UID mismatch/退避/脱敏 等排错 | [docs/troubleshooting.md](./docs/troubleshooting.md) |
+| **示例 app**：DevEco 可直接构建（连接→订阅→发消息） | [`examples/harmony/`](./examples/harmony/README.md) |
+| **零依赖 Node 示例**（先验证地址/密钥是否配对） | [`examples/node/`](./examples/node/README.md) |
+
+> ⚠️ 示例与文档里**只有占位符**（`wss://im.example.com:6061/v0/channels`、`YOUR_API_KEY`）。
+> 真实服务地址与密钥请放本地忽略文件（`im.local.json` / `config.local.json` / 环境变量），**不要提交**。
+
 ---
 
 ## 1. 它做什么 / 不做什么

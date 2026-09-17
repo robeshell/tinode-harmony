@@ -219,3 +219,10 @@ test('parseServerMessage 拒绝超大帧与类型不对的关键字段', () => {
   assert.notEqual(parseServerMessage('{"data":{"topic":"t","seq":7,"content":"x"}}'), null);
   assert.equal(parseServerMessage(`{"note":{"what":"kp"}}`, 5), null, '小上限也能挡住正常帧');
 });
+
+// 登录 scheme：token（默认）/ basic / anonymous（示例与公开服务自测用）
+test('buildLogin 支持三种 scheme', () => {
+  assert.deepEqual(JSON.parse(buildLogin('1', 'tk')), { login: { id: '1', scheme: 'token', secret: 'tk' } });
+  assert.deepEqual(JSON.parse(buildLogin('2', 'u:p', 'basic')), { login: { id: '2', scheme: 'basic', secret: 'u:p' } });
+  assert.deepEqual(JSON.parse(buildLogin('3', '', 'anonymous')), { login: { id: '3', scheme: 'anonymous' } });
+});
