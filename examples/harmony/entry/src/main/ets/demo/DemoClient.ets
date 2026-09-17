@@ -470,6 +470,35 @@ export class DemoClient {
     return client === null ? [] : client.profiles();
   }
 
+  /** 消息变化后刷新会话列表（预览/时间/未读）。 */
+  private refreshConversationPreviews(): void {
+    const client = this.tinode;
+    if (client === null) return;
+    const topic = this.currentTopic;
+    const state = client.topicState(topic);
+    const known = client.profiles();
+    const list: DemoConversation[] = [];
+    for (let i = 0; i < known.length; i++) {
+      const profile = known[i];
+      if (profile.topic === 'me') continue;
+      const last = this.lastMessageOfTopic(profile.topic);
+      list.push({
+        topic: profile.topic,
+        name: profile.name.length > 0 ? profile.name : profile.topic,
+        photo: profile.photo,
+        unread: profile.read > 0 ? Math.max(0, profile.seq - profile.read) : profile.seq,
+        online: profile.online,
+        lastSeenMs: profile.lastSeenMs,
+        seq: profile.seq,
+        subscribed: true,
+        accessSummary: this.accessOf(profile.topic),
+        preview: last === null ? '' : previewOfKind(last.kind, last.text),
+        timeText: last === null ? '' : timeLabelOf(last.ts, Date.now())
+      });
+    }
+    if (list.length > 0) this.listener.onConversations(list);
+  }
+
   /** 某个会话的最后一条消息（会话列表预览用）。 */
   private lastMessageOfTopic(topic: string): DemoMessage | null {
     const bucket = this.messagesByTopic.get(topic);
@@ -613,6 +642,7 @@ export class DemoClient {
     bucket.push(message);
     this.decorate(bucket);
     if (data.topic === this.currentTopic) this.listener.onMessages(bucket.slice());
+    this.refreshConversationPreviews();
     this.listener.onLog(`收到 ${data.topic} seq=${data.seq}`);
   }
 }

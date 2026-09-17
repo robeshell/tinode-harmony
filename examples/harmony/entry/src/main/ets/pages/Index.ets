@@ -94,6 +94,7 @@ struct Index {
   @Local peerOnline: boolean = false;
   @Local peerSeen: string = '';
   @Local draft: string = '';
+  @Local newTopic: string = '';
   @Local bold: boolean = false;
   @Local italic: boolean = false;
   @Local showAttach: boolean = false;
@@ -114,6 +115,7 @@ struct Index {
       this.apiKey = cfg.apiKey;
       this.user = cfg.user.length > 0 ? cfg.user : cfg.token;
       this.password = cfg.password;
+      this.newTopic = cfg.topic;                     // 配置里给了会话就直接预填，方便真机一键打开
       this.append('已读取本地配置');
     }).catch(() => {});
     const listener: DemoListener = {
@@ -396,6 +398,9 @@ struct Index {
           Text(item.preview.length > 0 ? item.preview : '（还没有消息）')
             .fontSize(13).fontColor(DemoTheme.textSecondary)
             .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (item.accessSummary.length > 0) {
+            Text(item.accessSummary).fontSize(10).fontColor(DemoTheme.textHint).maxLines(1)
+          }
           if (item.unread > 0) {
             Text(`${item.unread > 99 ? '99+' : item.unread}`)
               .fontSize(11).fontColor(Color.White)
@@ -427,12 +432,12 @@ struct Index {
       .backgroundColor(Color.White)
 
       Row({ space: 8 }) {
-        TextInput({ text: $$this.draft, placeholder: '新会话：输入 usrXXXXXX' })
+        TextInput({ text: $$this.newTopic, placeholder: '新会话：输入 usrXXXXXX' })
           .layoutWeight(1).height(36).backgroundColor(DemoTheme.fieldFill).borderRadius(18)
         Button('打开').height(36).borderRadius(18).backgroundColor(DemoTheme.brand).fontSize(13)
           .onClick(() => {
-            if (this.draft.trim().length === 0) return;
-            this.openConversation(this.draft.trim(), this.draft.trim(), false, 0);
+            if (this.newTopic.trim().length === 0) return;
+            this.openConversation(this.newTopic.trim(), this.newTopic.trim(), false, 0);
           })
         Button('发给自己').height(36).borderRadius(18).fontSize(13)
           .backgroundColor(Color.White).fontColor(DemoTheme.brandText)
@@ -448,7 +453,12 @@ struct Index {
       }
       .width('100%').padding({ left: 12, right: 12, bottom: 10 }).backgroundColor(Color.White)
 
-      if (this.conversations.length === 0) {
+      if (this.conversations.length === 0 && this.busy) {
+        Column({ space: 10 }) {
+          LoadingProgress().width(36).height(36).color(DemoTheme.brand)
+          Text('正在加载会话…').fontSize(13).fontColor(DemoTheme.textSecondary)
+        }.layoutWeight(1).justifyContent(FlexAlign.Center).width('100%')
+      } else if (this.conversations.length === 0) {
         Column({ space: 8 }) {
           Text('💬').fontSize(40)
           Text('还没有会话').fontSize(15).fontColor(DemoTheme.textSecondary)
@@ -464,10 +474,13 @@ struct Index {
         .layoutWeight(1).width('100%').divider({ strokeWidth: 0.5, color: DemoTheme.divider, startMargin: 68 })
       }
 
-      if (this.cacheLine.length > 0) {
-        Text(this.cacheLine).fontSize(10).fontColor(DemoTheme.textHint)
-          .width('100%').padding({ left: 16, top: 6, bottom: 6 })
-      }
+      Row({ space: 8 }) {
+        Text(this.myUid.length > 0 ? `我的 uid：${this.myUid}` : '')
+          .fontSize(10).fontColor(DemoTheme.textHint).layoutWeight(1)
+        if (this.cacheLine.length > 0) {
+          Text(this.cacheLine).fontSize(10).fontColor(DemoTheme.textHint)
+        }
+      }.width('100%').padding({ left: 16, top: 6, bottom: 6 })
     }
     .width('100%').height('100%').backgroundColor(DemoTheme.pageBackground)
   }
@@ -534,16 +547,17 @@ struct Index {
           Blank().width(32)
         }
         Column({ space: 2 }) {
-          Row({ space: 6 }) {
-            if (item.isMine) { Blank().layoutWeight(1) }
+          Row() {
             Column() { this.messageContent(item) }
               .padding({ left: DemoTheme.bubblePaddingH, right: DemoTheme.bubblePaddingH, top: DemoTheme.bubblePaddingV, bottom: DemoTheme.bubblePaddingV })
               .constraintSize({ maxWidth: DemoTheme.bubbleMaxWidth })
               .backgroundColor(item.isMine ? DemoTheme.bubbleMine : DemoTheme.bubblePeer)
               .borderRadius(DemoTheme.bubbleRadius)
               .border(item.isMine ? { width: 0 } : { width: 0.5, color: DemoTheme.bubbleBorder })
-            if (!item.isMine) { Blank().layoutWeight(1) }
-          }.width('100%').alignItems(VerticalAlign.Top)
+          }
+          .width('100%')
+          .justifyContent(item.isMine ? FlexAlign.End : FlexAlign.Start)
+          .alignItems(VerticalAlign.Top)
           if (item.isMine && item.status.length > 0) {
             Text(deliveryMarkOf(item.status)).fontSize(10)
               .fontColor(item.status === 'failed' ? DemoTheme.danger : DemoTheme.textHint)
