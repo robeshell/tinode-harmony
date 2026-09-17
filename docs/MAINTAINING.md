@@ -10,13 +10,13 @@
 仓库：/Volumes/LexarE300/Code/tinode-harmony（= GitHub robeshell/tinode-harmony，public）
 宿主仓的 vendored 副本：/Volumes/LexarE300/Code/leakdetector-next/harmony/entry/src/main/ets/tinode（改这里要同步两处，保持内容一致）
 
-先读：README.md（能力与 TODO）、CHANGELOG.md（最近改了什么）、docs/（9 篇：getting-started / configuration / api /
-architecture / attachments / storage / security / troubleshooting / comparison-android）。
+先读：README.md（能力与 TODO）、CHANGELOG.md（最近改了什么）、docs/（10 篇：getting-started / configuration / api /
+architecture / attachments / storage / security / troubleshooting / comparison-android / MAINTAINING）。
 
 工作方式：
 1. 纯逻辑先写、先测（tests/*.test.mjs，node --test 跑；接口类型要用 `import type`，否则 node 类型擦除会报错），再接平台层/界面；
 2. 每批收口前必须跑：
-   - 独立仓：node --test tests/*.test.mjs  （当前 94 例）
+   - 独立仓：node --test tests/*.test.mjs  （当前 150 例）
    - 宿主仓：node --test harmony/tests/*.test.mjs、assembleHap 0 ERROR、tools/check-sdk-hygiene.py、tools/check-evidence.py
    - 示例工程：examples/harmony 里 hvigorw assembleHap 0 ERROR
    - 推送前：bash scripts/check-no-secrets.sh（绝不提交真实服务地址与密钥）
@@ -36,9 +36,17 @@ architecture / attachments / storage / security / troubleshooting / comparison-a
 - 判定消息类型用 draftyEntities（draftySegments 会跳过 LN/MN/HT）
 - 未订阅就 pub 会 409 → 订阅成功后再发（示例里做了排队）
 - basic 登录的 secret 必须是 base64("用户名:密码")；Node 侧 apikey 走 ?apikey=，HarmonyOS 侧走 X-Tinode-APIKey 头
+- 建群走 sub 不走 set：真正的群名在应答 ctrl.topic 里（本地那个 new… 只是占位），必须换名；
+  且 new…/nch… 上发 set/invite 必被拒（上游抛 NotSynchronizedException）—— 用 isNewTopic() 拦；
+  门面的 createGroup() 已经把改名与登记改写做完了，直接用它返回的 topic
+- get{what:"sub"/"desc"} 成功回 meta、**失败回 ctrl**：门面等着两条路都能兑现的应答，别只等 meta（会让失败请求挂死）
+- 权限串 N 是**有效值**（显式无权限/封禁），合并成员时判空不判真假；改别人权限前用 updateAccessMode() 算整串
 
 待办（TODO）：
-- 群组 grp（P7）；推送 set{deviceToken}（P8，需 AGC 开通）
+- 群组 grp（P7）：**批次一–四已完成**（纯逻辑 + 报文 + 会话/门面入口 + 示例界面「建群/成员」，
+  56 例单测；`examples/node/group-check.mjs` 在**真实服务端**跑通 17/17，含**群内双向收发**）；
+  真机已双向通过（建群 → 两账号互发消息 / 群名 / 成员邀请·移出）；**剩下 = 改群资料（改名/换头像）**
+- 推送 set{deviceToken}（P8，需 AGC 开通）
 - 附件平台上传的真机验证（HarmonyAttachmentHttp）、断点续传/秒传/图片转码
 - HAR 打包并在空工程验证；RDB 存储实现示例；CI（npm test + 许可头检查）
 - 示例小问题：撤回占位待用户确认；远方消息到达后会话列表预览刷新不够及时；满屏长历史的自动滚动未验证
@@ -52,7 +60,7 @@ architecture / attachments / storage / security / troubleshooting / comparison-a
 
 ```bash
 cd /Volumes/LexarE300/Code/tinode-harmony
-node --test tests/*.test.mjs          # SDK 自测（94 例）
+node --test tests/*.test.mjs          # SDK 自测（150 例）
 bash scripts/check-no-secrets.sh      # 提交前脱敏自检
 bash examples/harmony/sync-sdk.sh     # 把 src/ 同步进示例工程
 

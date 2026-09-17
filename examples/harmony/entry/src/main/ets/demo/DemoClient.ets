@@ -12,6 +12,7 @@
  * - 附件：`TinodeAttachment.ts`（校验/分块/进度/草稿）+ `TinodeAttachmentHttp.ets`（上传，**未真机验证**）
  * - 权限：`TinodeAcs.ts`（`acsSummary` 等）
  * - 在线/最后在线：`pres` → `TinodeTopic.lastSeenMs`
+ * - 群组（P7）：`createGroup` / `members` / `inviteMember` / `removeMember`（`tinode/TinodeGroup.ts`）
  */
 import { common } from '@kit.AbilityKit';
 import {
@@ -27,7 +28,7 @@ import { HarmonyAttachmentHttp } from '../tinode/TinodeAttachmentHttp.ets';
 import { PickedFile, RecordedVoice } from './DemoPickers';
 import { durationTextOf, needsTimeLabel, previewOfKind, sizeTextOf, timeLabelOf } from './DemoFormat';
 
-import type { AttachmentMeta } from '../tinode/Index.ts';
+import type { AttachmentMeta, TinodeGroupCreated, TinodeGroupInfo, TinodeMember } from '../tinode/Index.ts';
 /** MIME → 社交/Drafty 实体类型（图片 IM / 音频 AU / 视频 VD / 其它 EX）。 */
 function guessKindOf(mime: string): string {
   const value = mime.toLowerCase();
@@ -91,6 +92,15 @@ export interface DemoConversation {
   timeText: string;
 }
 
+/** 页面展示用的一个群成员（P7）。 */
+export interface DemoMember {
+  user: string;
+  name: string;
+  /** 实际权限（`acs.mode`，如 `JRWPA`/`O`/`N`）。 */
+  mode: string;
+  online: boolean;
+}
+
 /** 回调：页面实现它接收数据（避免页面直接持有 SDK 类型）。 */
 export interface DemoListener {
   onState: (state: string, detail: string) => void;
@@ -98,6 +108,12 @@ export interface DemoListener {
   onConversations: (list: DemoConversation[]) => void;
   onMessages: (list: DemoMessage[]) => void;
   onUploadProgress: (percent: number, note: string) => void;
+  /** 群成员列表（P7）：可选，只有群聊页用到。 */
+  onMembers?: (topic: string, list: DemoMember[]) => void;
+  /** 群资料（P7）：群的**名字**在群自己的 `desc.public.fn` 里（不在 `meta.sub[].pub`），可选。 */
+  onGroupName?: (topic: string, name: string) => void;
+  /** 建群成功（P7）：页面据此进入新群（话题名是服务端给的真名）。 */
+  onGroupCreated?: (topic: string, name: string) => void;
 }
 
 interface DemoConfig {
@@ -115,6 +131,8 @@ export class DemoClient {
   private accessByTopic: Map<string, string> = new Map();
   private messagesByTopic: Map<string, DemoMessage[]> = new Map();
   private currentTopic: string = '';
+  /** 会话还没就绪时记下要打开的会话，`onState('ready')` 后补发（否则 sub/get 会被静默丢弃）。 */
+  private pendingOpenTopic: string = '';
   private apiKey: string = '';
   private serverBase: string = '';
   private authToken: string = '';
@@ -148,7 +166,12 @@ export class DemoClient {
     sessionConfig.syncHistoryOnReconnect = true;
     sessionConfig.maxBackoffMs = 30000;
     const hooks: TinodeHooks = {
-      onState: (state: ImSessionState) => this.listener.onState(state, ''),
+      onState: (state: ImSessionState) => {
+        this.listener.onState(state, '');
+        if (state === 'ready' && this.pendingOpenTopic.length > 0) {
+          this.openTopicNow(this.pendingOpenTopic);      // 就绪后补上"打开会话"
+        }
+      },
       onServerVersion: (version: string) => this.listener.onState('ready', `服务端协议 ${version}`),
       onTopics: (topics: TinodeTopic[]) => this.emitConversations(topics),
       onTopicState: (state: TinodeTopicState) => {
@@ -156,7 +179,11 @@ export class DemoClient {
         if (state.subscribed) this.flushPendingSends();      // 订阅成功后再补发排队中的消息
       },
       onRawData: undefined,
-      onMessage: (message: TinodeMessage) => this.appendMine(message),
+      onMessage: (message: TinodeMessage) => {
+        // 真机核对用：能收到 data 却看不到气泡 = 渲染问题；收不到 = 订阅/时机问题
+        this.listener.onLog(`收到 data ${message.topic} seq=${message.seq} mine=${message.isMine}`);
+        this.appendMine(message);
+      },
       onMeta: (meta: ImMeta) => this.listener.onLog(`meta（${meta.sub === undefined ? 0 : meta.sub.length} 条订阅）`),
       onPres: (pres: ImPres) => this.listener.onLog(`presence ${pres.topic} ${pres.what === undefined ? '' : pres.what}`),
       onNote: (note: ImNote) => this.listener.onLog(`note ${note.topic === undefined ? '' : note.topic} ${note.what === undefined ? '' : note.what}`),
@@ -390,6 +417,95 @@ export class DemoClient {
   }
 
   /** 拉会话列表（`get{topic:"me", what:"sub"}`）。 */
+  /** P7：**建群**（成功后刷新会话列表并直接进入新群）。`defacs` 用 Tinode 群聊的常见默认值。 */
+  createGroup(name: string): void {
+    const tinode = this.tinode;
+    if (tinode === null) { this.listener.onLog('建群失败：尚未连接'); return; }
+    const groupName = name.trim();
+    if (groupName.length === 0) { this.listener.onLog('建群失败：群名不能为空'); return; }
+    tinode.createGroup(groupName, { defacs: { auth: 'JRWPA', anon: 'N' } })
+      .then((created: TinodeGroupCreated): void => {
+        // 服务端会把本地的占位名 new… 换成真正的 grp…，日志里如实写出来，便于在真机上核对
+        this.listener.onLog(`建群成功：${created.topic}（占位名 ${created.requestedTopic}，我的权限 ${created.mode.length > 0 ? created.mode : '未下发'}）`);
+        this.refreshConversations();
+        this.openTopic(created.topic);
+        const done = this.listener.onGroupCreated;
+        if (done !== undefined) done(created.topic, groupName);
+      })
+      .catch((reason: string): void => { this.listener.onLog(`建群失败：${reason}`); });
+  }
+
+  /**
+   * P7：拉群资料，拿**群名**。
+   *
+   * 为什么单独拉：`meta.sub[]` 里的 `pub` 是"**我的订阅**的 public"，对群话题通常是空的 ——
+   * 群名在群自己的 `desc.public.fn` 里（`get{topic:"grp…", what:"desc"}`）。不拉的话，
+   * 会话列表与聊天页标题只能显示 `grpXXXXXX` 这种话题 id（真机上实测就是这样）。
+   */
+  loadGroupInfo(topic: string): void {
+    const tinode = this.tinode;
+    if (tinode === null || topic.length === 0) return;
+    tinode.groupInfo(topic)
+      .then((info: TinodeGroupInfo | null): void => {
+        if (info === null) return;
+        this.listener.onLog(`群资料：${info.name.length > 0 ? info.name : '(无名)'} kind=${info.kind} defacs=${info.defacs.auth}/${info.defacs.anon}`);
+        if (info.name.length > 0) {
+          const done = this.listener.onGroupName;
+          if (done !== undefined) done(topic, info.name);
+        }
+      })
+      .catch((reason: string): void => { this.listener.onLog(`拉群资料失败：${reason}`); });
+  }
+
+  /** P7：拉的群成员（结果走 `listener.onMembers`）。 */
+  refreshMembers(topic: string): void {
+    const tinode = this.tinode;
+    if (tinode === null || topic.length === 0) return;
+    tinode.members(topic, 0)
+      .then((rows: TinodeMember[]): void => {
+        const list: DemoMember[] = [];
+        for (let i = 0; i < rows.length; i++) {
+          const row = rows[i];
+          list.push({
+            user: row.user,
+            name: row.name.length > 0 ? row.name : row.user,
+            mode: row.mode.length > 0 ? row.mode : '(未下发)',
+            online: row.online
+          });
+        }
+        this.listener.onLog(`群成员：${list.length} 人`);
+        const done = this.listener.onMembers;
+        if (done !== undefined) done(topic, list);
+      })
+      .catch((reason: string): void => { this.listener.onLog(`拉成员失败：${reason}`); });
+  }
+
+  /** P7：邀请成员（`mode` 是整串权限）。成功后自动刷新成员列表。 */
+  inviteMember(topic: string, uid: string, mode: string): void {
+    const tinode = this.tinode;
+    if (tinode === null) return;
+    const target = uid.trim();
+    if (target.length === 0) { this.listener.onLog('邀请失败：uid 不能为空'); return; }
+    tinode.inviteMember(topic, target, mode)
+      .then((): void => {
+        this.listener.onLog(`已邀请 ${target}（权限 ${mode}）`);
+        this.refreshMembers(topic);
+      })
+      .catch((reason: string): void => { this.listener.onLog(`邀请失败：${reason}`); });
+  }
+
+  /** P7：把成员移出群。成功后自动刷新成员列表。 */
+  removeMember(topic: string, uid: string): void {
+    const tinode = this.tinode;
+    if (tinode === null) return;
+    tinode.removeMember(topic, uid.trim())
+      .then((): void => {
+        this.listener.onLog(`已移出 ${uid.trim()}`);
+        this.refreshMembers(topic);
+      })
+      .catch((reason: string): void => { this.listener.onLog(`移出失败：${reason}`); });
+  }
+
   refreshConversations(): void {
     const client = this.tinode;
     if (client !== null) client.loadSubscriptions(50);
@@ -400,11 +516,26 @@ export class DemoClient {
     const client = this.tinode;
     if (client === null) return;
     this.currentTopic = topic;
+    if (!client.ready()) {
+      // 会话还没就绪时，subscribe/history 会被 SDK 按"未就绪"返回 ''（静默丢弃）。
+      // 疑似真机上"打开群却没有历史、也收不到新消息"的原因之一，所以记下来等 ready 再补。
+      this.pendingOpenTopic = topic;
+      this.listener.onLog(`会话 ${topic} 尚未就绪：等连接就绪后再打开`);
+      return;
+    }
+    this.openTopicNow(topic);
+  }
+
+  /** 真正发出"打开会话"的报文（订阅 + 名片 + 历史），并把报文 id 写进日志便于真机核对。 */
+  private openTopicNow(topic: string): void {
+    const client = this.tinode;
+    if (client === null) return;
+    this.pendingOpenTopic = '';
     const subscribeOptions: TinodeSubscribeOptions = { withDesc: true, withSub: true, limit: 24 };
-    client.subscribe(topic, subscribeOptions);
-    client.loadProfile(topic);
-    this.loadHistory(topic, 0, 30);
-    this.listener.onLog(`打开会话 ${topic}`);
+    const subId = client.subscribe(topic, subscribeOptions);
+    const cardId = client.loadProfile(topic);
+    const histId = client.history(topic, 0, 30);
+    this.listener.onLog(`打开会话 ${topic}：sub=${subId} 名片=${cardId} 历史=${histId}`);
   }
 
   /** 历史分页（`before` 翻旧账）。 */

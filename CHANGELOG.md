@@ -4,6 +4,153 @@
 
 ## [Unreleased]
 
+### 群组 P7 批次五：**真机双向群聊通过**（修「打开会话早于连接就绪」）
+- **真机（PSN-AL00 / hdc 6CS9K25C23081634，2026-09-17）双向跑通**：会话列表→打开群「项目部」
+  （`grpvDIh1A3NamA`）→ 群里同时显示**自己发的位置消息**（`📍 公司 31.86,117.28 ✓`）与
+  **对方账号发的三条消息**（`成员B：我在群里说话`、`成员B：实时消息`、`成员B：双向验证消息`，
+  最后一条是当场实时送达：对端 `pub` → `ctrl{202}`、本端收到 `data{seq:4}`）。
+  → 至此「建群 → 两个账号在群里互发消息」在真机上**双向通过**；上一版"未跑通"的记录由本条**取代**。
+- **根因与修法**：示例的 `openTopic()` 在**会话还没就绪**时就发 `subscribe`/`history`
+  （真机上那次点「密码登录」会 `start()` 重启一次会话），而 SDK 对未就绪的请求按约定返回 `''`
+  **静默丢弃** → 既没拿到历史、也没真正订阅上，于是"打开群一片空白、别人发的也收不到"。
+  修法：`openTopic` 增加就绪检查，未就绪就记进 `pendingOpenTopic`，在 `onState('ready')` 时补发；
+  并把发出去的报文 id 写进运行日志（`打开会话 …：sub=… 名片=… 历史=…`）便于真机核对。
+- 顺带加了一条真机诊断日志：`收到 data <topic> seq=<n> mine=<bool>`（能收到却没气泡=渲染问题；
+  收不到=订阅/时机问题）——就是靠它把"渲染"与"订阅"两类原因分开的。
+- 测试：独立仓 **150/150 pass**；示例工程 assembleHap **0 ERROR**（本轮未改 SDK `src/`，
+  宿主仓测试/构建沿用上一轮 1058/1058 与 0 ERROR）。
+
+### 群组 P7 批次四：示例界面（建群 / 成员 / 群名）+ 群内收发验证 + 修 303 订阅判定
+- **示例 App 能玩群聊了**（`examples/harmony`）：
+  - 会话列表顶栏新增「**建群**」→ 填群名 → 创建（走 `createGroup`，自动进入新群）；
+  - 聊天页标题对**群话题**显示**群名** + 「**成员**」入口：成员列表（名字 / uid / 权限 / 在线点）、
+    「邀请 JRWPA」（填 uid）、每行「移出」（自己那行不显示）；
+  - 真机实测（PSN-AL00）**群会话能出现在会话列表里**、`建群`/`成员` 入口能渲染。
+- **真机发现并修掉一个真 bug**：群会话原来只显示 `grpXXXXXX` 话题 id —— 因为群名在**群自己的
+  `desc.public.fn`** 里，而 `meta.sub[].pub` 是"我的订阅的 public"（对群通常是空的）。
+  示例因此新增 `loadGroupInfo()`（`get{what:"desc"}`）来取群名，并在拿到后更新标题与会话列表。
+  **这条对 SDK 使用者同样重要**：只订阅 `me` 是拿不到群名的。
+- **真实服务端抓出第二个真 bug（已修）**：`sub` 的应答 **303 See Other = "已经订阅过了"**
+  （上游 `Topic.java:911` 就是这么判的），而 `ImSession` 原来用 `ctrlOk`（严格 2xx）判定订阅结果，
+  于是把**已订阅**的话题标成"未订阅"。后果不只是重连多订一次：宿主的「等订阅成功再发送」队列
+  （示例的 `whenSubscribed`）会**永远不补发**。改为 `ctrlAccepted`（2xx/3xx 都算订阅成功），
+  4xx 仍然标未订阅；新增回归用例。
+- **群内收发消息已验证**（真实服务端，`examples/node/group-check.mjs` 扩到 **17/17 通过**）：
+  群主发 → 成员收到（下行）、成员发 → 群主收到（上行）、自己的消息被服务端**回显**成 data。
+- 测试：独立仓 **150/150 pass**；宿主仓 **1058/1058 pass**、`assembleHap` 0 ERROR、
+  `check-sdk-hygiene.py`、`check-evidence.py`、`dead-exports.mjs` 全绿；三处 `src/` 一致。
+- **真机已完成（PSN-AL00 / hdc 6CS9K25C23081634，2026-09-17）**：
+  连接 →「在线 · 服务端协议 0.25」→ 密码登录 → 会话列表「建群」入口渲染；
+  建群面板输入中文群名「**项目部**」→ 创建 → **自动进入群聊页**，标题显示**群名**（`groupInfo` 生效）+「成员」入口；
+  **群内发消息**：加号 → 位置 → 群里出现 `📍 公司 31.86000, 117.28000 ✓`（送达标记）；
+  **成员面板**：`群成员（1）` → 真实名册（我 = `JRWPASDO` 所有者，自己那行显示「（我）」而不是「移出」）；
+  **邀请成员**：填 uid 邀请 → `群成员（2）`，新成员显示 `JRWPA` + 「移出」；
+  **另一个账号（Node，uid `usrd1wiPvxHnMk`）在同一个群里成功发言**（服务端回显 `{"txt":"成员B：我在群里说话"}`）。
+- **真机未完成（照实标注）**：**对方发的那条群消息在 App 里没显示出来** —— 重新打开该群只看到
+  「这里还没有消息」。已排除的现象：群会话在列表里、群聊页标题正确、自己发的消息能显示；
+  **原因未查明**，候选是演示 App 的取法问题（`openTopic` 会发 `get{what:"data"}`，而本部署的历史接口
+  受限、仓库文档已登记该部署历史 403）叠加"消息在 App 未订阅期间发出"。因此
+  「**两个账号在真机上互发消息**」只完成**单向**（App → 群 ✓；对方 → App ✗），
+  **不算跑通**；协议层与门面层的双向收发由真实服务端 17/17 覆盖（那条是通的）。
+- **2026-09-17 第二轮真机诊断（结论，供下轮接着修）**：
+  - 用一个 **Node 客户端登录同一个账号**（示例配置里的账号）订阅同一个群，实测：**显式 `get{what:"data"}`
+    能拿到历史**（`data{seq:2}`、`data{seq:1}`、`ctrl{208}`）；而**订阅内联窗口**（`sub{get:{data:{limit:24}}}`）
+    **不回历史**（只有 `ctrl{200}` + `meta`）。→ `docs/configuration.md` 里「本部署历史 403、改用内联窗口」
+    的说法已**订正**。
+  - 同一账号用 Node 能收到群里的**实时**消息（对端 `pub` 回 `ctrl{202}`，本端收到 `data{seq:3}`），
+    而**示例 App 停在群聊页时既没显示历史、也没显示那条实时消息** → 问题在**示例 App 那一侧**
+    （打开会话时的订阅/取历史时机或渲染路径），**不在 SDK 的群能力**（数据确实到达了这个账号）。
+  - 已排除：群会话在列表里、群聊页标题正确、**自己发的**消息能显示（位置消息带 ✓）、成员面板与邀请都正常。
+  - 下轮修法候选：给示例的 `openTopic` 加可见日志（确认 `sub`/`get` 是否真发出、`onMessage` 是否触发），
+    并把「打开会话」改成**登录 ready 之后再发**（怀疑打开时会话尚未 ready，`subscribe`/`history` 被 `''` 静默丢弃）。
+- 另外两条工具/环境限制（不是功能缺陷，供下次避免踩）：`uitest inputText` 不会同步 ArkUI 的
+  `$$` 双向绑定（所以真机上"打字发消息"发不出去，改用「位置」这类无需输入的消息验证）；
+  测试期间**设备被另一个会话占用**（宿主 App 反复抢回前台），交互多次被中断。
+
+### 群组 P7 批次三：真实服务端验证（Node 客户端）+ 修 3xx 幂等写
+- 新增可复跑的**群组端到端自检** `examples/node/group-check.mjs`（零依赖，走门面 + Node 内置 WebSocket）：
+  在一个真实 Tinode 服务上跑完「注册群主 → 建群 → members → 邀请 → 改默认权限 → groupInfo → 移出 → 清理」。
+- **实测（dev 服务端，协议 0.25，2026-09-17）：14/14 项通过** ——
+  `createGroup` 拿到服务端改名（`requested=new1lan17p1e6` → `topic=grp2V9zP97pZoY`，`renamed=true`）、
+  建群应答 `ctrl.params.acs=JRWPASDO`（所有者）、`members` 邀请前 1 条 → 邀请后 2 条且对端 `mode=JRWPA` →
+  移出后 1 条、`groupInfo` 的 `name`/`defacs` 与请求一致、结束时软删自检群。
+  **口径**：这是「Node 客户端 + 真实服务端」，**不是 HarmonyOS 真机**；真机与示例界面仍未验证。
+- **真实服务端当场抓出一个真问题并已修**：Tinode 对**幂等写**回 3xx —— 把相同的 `set{desc:{defacs}}`
+  再发一次会拿到 **304 Not Modified**；本端原来用 `ctrlOk`（严格 2xx）判定，于是把"什么都没变"的
+  成功当成失败，抛出兜底文案「消息服务返回了未知错误」。
+- 修复：`TinodeWire` 新增 **`ctrlAccepted(code)`**（`200 <= code < 400` = 服务端**接受**了请求，
+  依据上游 promise 判定 `Tinode.java:713-714`），群组的幂等写（邀请/改权限/改默认权限/移出）改用它；
+  `ctrlFailureText` 补 3xx 分支（「服务端没有修改任何内容（3xx）」）。
+  **`createGroup` 有意不跟随这条放宽**：上游对 `sub` 的 3xx 是"已订阅"且**不会换名**
+  （`Topic.java:911-925`），把占位名 `new…` 当结果返回给调用方是不可用的 → 显式 reject（注释写明理由）。
+- 测试：`tests/im-group.test.mjs` 21 → **24 例**（`ctrlAccepted` 边界、304/303 写操作 resolve、
+  createGroup 3xx 必须 reject）。独立仓 **149/149 pass**；宿主仓 **1050/1050 pass**、`assembleHap` 0 ERROR、
+  `check-sdk-hygiene.py`、`check-evidence.py`、`dead-exports.mjs` 全绿；示例工程已同步。
+- **残留（如实登记）**：自检会在 dev 服务端注册**一次性测试账号**（每次运行一个 `grpcheck…`）并留下
+  **软删的群**（软删只对群主隐藏，服务端仍留行）；被邀请人已移出、其订阅已删除。
+
+### 群组 P7 批次二：会话与门面接线（建群改名、成员、权限、应答归因）
+- `TinodeTopics.rename(from, to)`：建群成功时把登记状态**搬到服务端给的真名**下（订阅意图与位点都保留）；
+  目标名已登记时合并（位点取最大、`subscribed` 取或），并**保留目标名自己的订阅意图**——
+  不让改名把已有信息降级。
+- `ImSession` 新增群组发送口：
+  - `createTopic(topic, options)`：建群/建频道走 `sub{topic:"new…", set{desc,tags}}`（**不是 `set`**）。
+    收到 2xx 时用应答里的 **`ctrl.topic`** 改名并标记订阅成功；**4xx/5xx 忘掉占位名**
+    （否则重连会对一个不存在的 `new…` 重新订阅，上游 4xx 也是 `stopTrackingTopic` + `expunge`）；
+    3xx（已订阅）保留占位名、不换名（上游口径）。
+  - `inviteMember(topic, user, mode)`（邀请/改成员权限）、`removeMember(topic, user)`（`del{what:"sub"}`）、
+    `setTopicDefacs(topic, auth, anon)`（改默认权限）、`loadMembers(topic, limit)`（`get{what:"sub"}`）。
+    参数非法（空话题/非法权限/空 user）返回 `''`，**不发脏帧**。
+- `Tinode` 门面新增群组 API：
+  - `createGroup(name, options?)` → `Promise<TinodeGroupCreated>`：返回 `{requestedTopic, topic, name, renamed, mode}`，
+    其中 **`topic` 是服务端给的真名**（占位名 `new…`/`nch…` 只在本地出现过），`mode` 取自 `ctrl.params.acs`；
+  - `inviteMember` / `setMemberMode` / `removeMember` / `updateGroupDefacs` → `Promise<void>`（2xx resolve，失败 reject 可读文案）；
+  - `members(topic, limit?)` → `Promise<TinodeMember[]>`；`groupInfo(topic)` → `Promise<TinodeGroupInfo | null>`（单聊/未知话题为 null）。
+- **应答归因**（本批新增的内部机制）：门面按报文 id 等在途请求，`ctrl` 与 `meta` **都能兑现同一条请求** ——
+  因为 `get{what:"sub"|"desc"}` 成功回 `meta`、**失败回的是 `ctrl`**；只等 `meta` 会让失败请求永远挂着。
+  断线时统一 reject（文案「连接已断开，请重试」），不让 Promise 悬着。
+- `ImCtrlParams` 增加 `acs` 字段（建群应答里服务端算好的我方权限，上游 `Topic.java:918-921`）。
+- **本批自己写出、又被测试当场抓出的两处**（已修，留档以免重犯）：
+  ① 建群 2xx 只改名、**没标记订阅成功** → `knownTopics()` 永远显示"未订阅"、重连还会重订一次；
+  ② `rename` 合并时用占位名的 prefs **覆盖**了已登记话题的意图（`withSub`/`limit` 被降级）。
+- `tests/im-group.test.mjs`：**21 例**（建群改名/失败清理/3xx、重连用真名重订阅的重归测试、成员与权限报文、
+  门面 createGroup/members/groupInfo/权限写操作、断线不挂死）。**独立仓 `node --test tests/*.test.mjs` → 146/146 pass**；
+  宿主仓同步后：`node --test harmony/tests/*.test.mjs` → **1047/1047 pass**、`assembleHap` **0 ERROR**、
+  `check-sdk-hygiene.py`（19 个源文件）、`check-evidence.py`、`harmony/tools/dead-exports.mjs` 全部通过；示例工程已同步。
+- **未做（照实标注）**：示例界面没有群聊入口；**真机与真实服务端均未验证**（建群全链路没跑过）；
+  改群资料（改群名/换头像）没有实现（只有建群时能带 `desc.public`）；成员审批/加入申请、频道订阅、
+  群消息回执等仍是宿主或后续批次的事。
+
+### 群组 P7 批次一：纯逻辑（话题分类/命名 + 成员模型 + 群权限）
+- 新增 `src/TinodeGroup.ts`（纯逻辑，协议依据是 Apache-2.0 的 vendored 官方 Java SDK）：
+  - **话题分类**：`topicKindOf`（`grp…`/`new…` → `grp`、`chn…`/`nch…` → `chn`、`usr…` → `p2p`、`me`/`fnd`/`sys` 原样）、
+    `isGroupTopic`（群+频道都算，对齐上游 `Topic.isGrpType:158-174`）、`isNewTopic`、`isP2PTopic`、`isChannelTopic`；
+  - **新话题命名**：`newGroupTopicName` / `newChannelTopicName` / `uniqueTopicSuffix` —— 建群时客户端**先造 `newXXXX` 名字**，
+    服务端在应答 `ctrl.topic` 里换成真正的 `grp…`（上游 `Topic.java:96`、`:925-928`）。
+    **有意不与上游逐位一致**：上游 `nextUniqueString:2337-2340` 用 Java `long` 做 `(now-…)<<16`，同样写法在 JS/ArkTS 里
+    `<<` 会按 int32 溢出、值本身又超过 `Number.MAX_SAFE_INTEGER`，反而**丢掉 counter**（同毫秒撞名）；
+    这里改成"秒级时间戳 + 计数 + 随机段"三段 32 进制（随机数由调用方传入，因此可测）；
+  - **成员模型**：`TinodeMember` + `memberFromSub` / `membersFromMeta`（`get{what:"sub"}` → `meta.sub[]`）、
+    `mergeMembers`（非空优先；`"N"`（封禁）也是**有效值**，判空不判真假）、`memberOf`、`sortMembers`（所有者→在线→有名字→uid）；
+  - **群权限**：`groupPermissionsOf` → `{isOwner, canRead, canWrite, canInvite(S), canApprove(A), canDeleteMessages(D), canEdit, isBanned}`
+    与单函数 `canInviteMembers` / `canApproveMembers` / `canEditGroup` / `canDeleteGroupMessages`。字母含义来自上游
+    `AcsHelper:15-22`；**服务端才是权威**，这些判定只用于 UI 显隐；
+  - **群资料**：`groupInfoFromMeta`（`meta.desc` → 名字/头像/`defacs`/`acs`；只认群类话题，单聊走 `profileFromDesc`）。
+- `src/TinodeWire.ts` 新增群组报文构造（形状对齐 `MsgClientSub`/`MsgClientSet`/`MsgSetMeta`/`MetaSetDesc`/`MetaSetSub`/`MsgClientDel`）：
+  `buildSubCreate`（`sub{topic, set{desc{public,defacs}, tags}}` 建群/建频道）、`buildSetSubMode`（邀请或改成员权限，**整串** mode）、
+  `buildSetDefacs`（改群默认权限）、`buildDelSubscription`（`del{what:"sub",user}` 移出群）；成员列表复用已有的 `buildGetMetaSub`。
+  参数非法（空 topic / 非法权限 / 空 user）返回 `''`，**不发脏帧**；`ImMetaSub` 增加 `acs` 字段。
+- `src/TinodeAcs.ts` 新增 **`updateAccessMode(mode, change)`**（对齐上游 `AcsHelper.update:222-260`）：
+  整串替换（`'JSA'` → `'JAS'`）与 `+/-` 增量（`'+P-S'` → `'RWP'`、`'-R'`）；`'N'` 在增量里是"无操作"；
+  非法输入（未知字母、`'R+W'`、悬空操作符）返回 `null` —— 这是要发给服务端改**别人**权限的值，宁可报错也不猜。
+- `tests/tinode-group.test.mjs`：**31 例**新用例（话题分类、命名确定性/字符集/脏输入、成员解析与合并、权限判定、
+  报文形状、权限增量）。**独立仓 `node --test tests/*.test.mjs` → 125/125 pass**；
+  宿主仓同步后（`harmony/tests` + vendored `tinode/`）：`node --test harmony/tests/*.test.mjs` → 1026/1026 pass、
+  `assembleHap` **0 ERROR**、`tools/check-sdk-hygiene.py`（19 个源文件）、`tools/check-evidence.py`、
+  `harmony/tools/dead-exports.mjs` 全部通过；示例工程 `examples/harmony` 的 `sync-sdk.sh` 已同步。
+- **未做（照实标注）**：**真机未验证**，也**没有对着真实服务端跑过建群全链路**（本批次只有源码 + 主机测试）；
+  facade/session 层入口（`Tinode.createGroup` / `invite` / `members()` 之类）与示例界面属于批次二/三，本次没有实现。
+
 ### 修复：`me` 自动订阅必须等已认证
 - `autoSubscribeMe` 之前在 `ready` 就订阅 `me`：**未认证**（`loginScheme:'none'` 的注册流程）时服务端回 **401**，
   而 401 是致命错误 → 会话被打成 `failed`，随后的注册也失败。现在改为**拿到 uid 后**（登录/注册成功）才订阅，

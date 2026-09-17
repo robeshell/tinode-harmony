@@ -29,11 +29,11 @@ import {
   backoffDelayMs, buildDelMessages, buildDelTopic, buildGetHistory, buildHi, buildLeave, buildLogin,
   accFailureText, buildAccAddCredential, buildAccCreate, buildAccUpdate, buildGetHistorySince, buildGetMetaDesc,
   buildGetMetaSub, buildSetPublicDesc, encodeBasicSecret, buildNoteKeyPress, buildNoteRead, buildPub, buildSub,
-  ctrlFailureText, ctrlIsFatal, ctrlOk,
+  buildSubCreate, buildSetSubMode, buildSetDefacs, buildDelSubscription, ctrlAccepted, ctrlKind, ctrlOk, ctrlFailureText, ctrlIsFatal,
   parseServerMessage, parseWsEndpoint
 } from './TinodeWire.ts';
 import type {
-  DelRange, ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, ImServerMessage, ImWsEndpoint
+  DelRange, ImCreateTopicOptions, ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, ImServerMessage, ImWsEndpoint
 } from './TinodeWire.ts';
 import { DEFAULT_MAX_FRAME_BYTES, DEFAULT_MAX_INBOUND_BYTES } from './TinodeWire.ts';
 import { TinodeTopics } from './TinodeTopics.ts';
@@ -178,6 +178,11 @@ export class ImSession {
   private topics: TinodeTopics = new TinodeTopics();
   /** 在途的订阅请求：报文 id → topic（收到 ctrl 后据此标记订阅成功/失败）。 */
   private subRequests: Map<string, string> = new Map();
+  /**
+   * 在途的**建群/建频道**请求（P7）：报文 id → 客户端造的占位名（`new…`/`nch…`）。
+   * 收到 2xx 时用应答里的 `ctrl.topic` 把登记状态改名（`TinodeTopics.rename`），4xx/5xx 时忘掉占位名。
+   */
+  private createRequests: Map<string, string> = new Map();
   /** 在途的注册请求（P3-min）：报文 id 集合（收到 ctrl 后完成登录）。 */
   private accRequests: Set<string> = new Set();
   private retryAtMs: number = 0;
@@ -482,12 +487,46 @@ export class ImSession {
       this.emitAuth(accUid, accToken);
       return;
     }
+    // 建群/建频道应答（P7）：**服务端在这里给出真正的话题名**，登记状态要跟着改名。
+    const createId = ctrl.id === undefined ? '' : ctrl.id;
+    const placeholder = this.createRequests.get(createId);
+    if (placeholder !== undefined) {
+      this.createRequests.delete(createId);
+      const realName = ctrl.topic === undefined ? '' : ctrl.topic.trim();
+      if (ctrlOk(ctrl.code)) {
+        if (realName.length > 0 && realName !== placeholder) {
+          this.topics.rename(placeholder, realName);
+          // 建群应答就是"订阅成功"的应答（上游在这一步 mAttached++）：不标记的话
+          // 重连时会对刚建好的群再订一次，而且宿主的 knownTopics() 会永远显示"未订阅"。
+          this.topics.markSubscribed(realName, true, Date.now());
+          tinodeLogDetail('im/topic',
+            `created ${redactTopic(placeholder)} → ${redactTopic(realName)}`, 'info');
+          this.emitTopicState(realName);
+        } else {
+          // 服务端没改名（老部署）——按占位名继续用，不假装改过。
+          this.topics.markSubscribed(placeholder, true, Date.now());
+          this.emitTopicState(placeholder);
+        }
+      } else if (ctrlKind(ctrl.code) === 'client' || ctrlKind(ctrl.code) === 'server') {
+        // 建群失败：占位名不该留在登记表里（否则重连会对一个不存在的 `new…` 重新订阅）。
+        this.topics.forget(placeholder);
+        this.emitTopicState(placeholder);
+      } else {
+        // 3xx：按上游口径是"已订阅"，不换名也不清理。
+        this.topics.markSubscribed(placeholder, true, Date.now());
+        this.emitTopicState(placeholder);
+      }
+    }
     // 订阅应答：按报文 id 归因，标记该主题订阅成功/失败（P1）。
     const subId = ctrl.id === undefined ? '' : ctrl.id;
     const subTopic = this.subRequests.get(subId);
     if (subTopic !== undefined) {
       this.subRequests.delete(subId);
-      this.topics.markSubscribed(subTopic, ctrlOk(ctrl.code), Date.now());
+      // 3xx 也是"订阅成功"：Tinode 对**已经订阅过**的话题回 303 See Other（上游 `Topic.java:911`
+      // 把它当"already subscribed"）。这里若只认 2xx，会把已订阅的话题标成"未订阅" ——
+      // 宿主等 `subscribed` 的发送队列就永远不会补发（真机/真实服务端实测：被邀请进群后
+      // 再 `sub` 会回 303）。
+      this.topics.markSubscribed(subTopic, ctrlAccepted(ctrl.code), Date.now());
       this.emitTopicState(subTopic);
     }
     // ready 之后的 ctrl：属于「某个具体请求」的应答，交给上层按 id 对应（如 pub 的 seq）。
@@ -574,6 +613,75 @@ export class ImSession {
     this.subRequests.set(id, topic);
     this.topics.remember(topic, withDesc, withSub, limit, Date.now());
     this.transport.send(buildSub(id, topic, withDesc, withSub, limit));
+    return id;
+  }
+
+  /**
+   * P7：**建群 / 建频道**（`sub{topic:"new…", set:{desc,tags}}`）。
+   *
+   * `topic` 是**客户端造的占位名**（`newXXXX`/`nchXXXX`，见 `TinodeGroup.newGroupTopicName`）——
+   * 建群走的是 `sub` 而不是 `set`，服务端接受后会在应答 **`ctrl.topic`** 里给出真正的 `grp…`/`chn…`
+   * （上游 `Topic.java:96`、`:925-928`）。本方法在收到 2xx 时自动把登记状态改到新名下，
+   * 所以在服务端应答之前，`knownTopics()` 里看到的是占位名；**调用方必须用应答里的名字**。
+   *
+   * 返回报文 id（未就绪或话题名为空返回 `''`）。
+   */
+  createTopic(topic: string, options: ImCreateTopicOptions): string {
+    if (this.currentState !== 'ready') return '';
+    const placeholder = topic.trim();
+    if (placeholder.length === 0) return '';
+    const id = this.takeId();
+    const frame = buildSubCreate(id, placeholder, options);
+    if (frame.length === 0) return '';
+    this.createRequests.set(id, placeholder);
+    // 先按占位名登记订阅意图：建群成功后改名，失败则忘掉（上游 4xx 也是 stopTrackingTopic + expunge）。
+    this.topics.remember(placeholder, true, false, 0, Date.now());
+    this.transport.send(frame);
+    return id;
+  }
+
+  /**
+   * P7：**邀请成员 / 改成员权限**（`set{topic, sub:{user,mode}}`）。`mode` 是**整串**权限
+   * （用 `TinodeAcs.updateAccessMode` 算出新值再发；上游同样发整串）。`user` 为空串 = 改我自己的订阅。
+   * 返回报文 id；参数非法（空话题/非法权限）返回 `''`，不发脏帧。
+   */
+  inviteMember(topic: string, user: string, mode: string): string {
+    if (this.currentState !== 'ready') return '';
+    const id = this.takeId();
+    const frame = buildSetSubMode(id, topic, user, mode);
+    if (frame.length === 0) return '';
+    this.transport.send(frame);
+    return id;
+  }
+
+  /**
+   * P7：**把成员移出群**（`del{topic, what:"sub", user}`）。封禁不是删除，而是把 `mode` 设成 `'N'`
+   * （见 `inviteMember`）；`user` 为空返回 `''`（服务端会拒绝无 user 的 `what:"sub"`）。
+   */
+  removeMember(topic: string, user: string): string {
+    if (this.currentState !== 'ready') return '';
+    const id = this.takeId();
+    const frame = buildDelSubscription(id, topic, user);
+    if (frame.length === 0) return '';
+    this.transport.send(frame);
+    return id;
+  }
+
+  /** P7：改群**默认权限**（`set{topic, desc:{defacs:{auth,anon}}}`）。空串表示这一侧不改。返回报文 id。 */
+  setTopicDefacs(topic: string, auth: string, anon: string): string {
+    if (this.currentState !== 'ready') return '';
+    const id = this.takeId();
+    const frame = buildSetDefacs(id, topic, auth, anon);
+    if (frame.length === 0) return '';
+    this.transport.send(frame);
+    return id;
+  }
+
+  /** P7：拉群**成员列表**（`get{topic, what:"sub", sub:{limit}}`）。结果在 `meta.sub[]`。返回报文 id。 */
+  loadMembers(topic: string, limit: number = 0): string {
+    if (this.currentState !== 'ready') return '';
+    const id = this.takeId();
+    this.transport.send(buildGetMetaSub(id, topic, limit));
     return id;
   }
 

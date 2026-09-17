@@ -48,6 +48,37 @@ note read/recv ──► read / recv 位点（本端 markRead 同口径）
 宿主可读 `knownTopics()` / `topicState(topic)`，或订阅 `onTopicState` 回调（订阅结果与位点推进时触发）。
 不想让 SDK 管这些的宿主：`autoResubscribe: false`（只重连不重订）与 `syncHistoryOnReconnect: false`（不补历史）。
 
+## 群组（P7 批次一/二）
+
+**群聊就是另一种 topic**（`grpXXXXXX`，而不是 `usrXXXXXX`），协议面仍然是 `sub`/`get`/`set`/`del`，
+所以架构上没有新增层：**纯逻辑与模型**在 `src/TinodeGroup.ts`，**报文**在 `src/TinodeWire.ts`，
+**编排与应答归因**在会话/门面（批次二）。
+
+```
+门面 Tinode.createGroup(name, opts) ──► ImSession.createTopic(占位名, opts) ──► TinodeWire.buildSubCreate
+   │                                        │
+   │                                        └─ 登记占位名（TinodeTopics.remember）
+   ◀── {topic: 真名, requestedTopic, renamed, mode} ◀── ctrl{topic:"grp…", params.acs}
+                                        │
+                                        └─ 2xx：TinodeTopics.rename(占位名 → 真名) + markSubscribed（重连订真名）
+                                           4xx/5xx：forget(占位名)（别对不存在的 new… 重订阅）
+                                           3xx：已订阅 → 保留占位名、不换名（上游口径）
+
+成员：Tinode.members()  ──► ImSession.loadMembers ──► get{what:"sub"} ──► meta.sub[] ──► membersFromMeta
+权限：Tinode.inviteMember/setMemberMode/removeMember/updateGroupDefacs ──► set{sub:{user,mode}} / del{what:"sub"}
+判定：groupPermissionsOf(myMode) ─► {canInvite(S), canApprove(A), canDeleteMessages(D), canEdit, isOwner}
+```
+
+三个容易踩的点，这里都按上游口径处理了：
+
+- **`new…` 是"还没同步"的群**：对这类话题发 `set`/邀请会被服务端拒（上游直接抛 `NotSynchronizedException`），
+  必须先等建群应答把名字换成 `grp…`；`isNewTopic()` 就是给宿主做这个判断用的；
+- **`N` 是有效权限值**：它表示"显式无权限/封禁"，不是"没拿到权限"，所以合并成员时按**判空**而不是判真假处理；
+- **`get` 失败回的是 `ctrl` 不是 `meta`**：门面按报文 id 等的请求必须两条路都能兑现，只等 `meta` 会让失败请求永远挂着
+  （断线时也会统一 reject，不留悬空 Promise）。
+
+`newXXXX` 的名字由客户端生成，但**真正的名字在应答里**（`ctrl.topic`），本地必须替换 —— 这一点与 P2P 不同。
+
 ## 三个端口
 
 | 端口 | 接口 | 默认实现 | 你要做什么 |

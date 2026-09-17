@@ -18,7 +18,7 @@ Tinode 即时通讯协议的 **HarmonyOS NEXT 客户端 SDK**（纯 ArkTS/TypeSc
 - 存储：可替换的存储端口 + 内存实现 + LRU 读缓存；消息去重、未读统计、会话摘要
 - 入站帧守卫、出站帧体量上限、日志脱敏
 
-**还没有**：群组、推送（要等 AGC 开通）、服务端侧多端同步、按关键词搜人。
+**还没有**：群组的**界面**（协议层与门面已实现，见下表）、推送（要等 AGC 开通）、服务端侧多端同步、按关键词搜人。
 
 <details>
 <summary>详细能力与状态（含 API，点开看）</summary>
@@ -32,7 +32,9 @@ Tinode 即时通讯协议的 **HarmonyOS NEXT 客户端 SDK**（纯 ArkTS/TypeSc
 | 订阅 / 发布 / 历史分页 / 已读 / 正在输入 / 撤回 / 删除会话 | `subscribe` · `publish` · `history` · `setRead` · `setTyping` · `deleteMessages` | ✅ |
 | 主题登记 + 断线自动重订阅 + `since` 补历史 | `TinodeTopics` · `knownTopics()` · `onTopicState` | ✅ |
 | 会话列表（`meta.sub` / `meta.desc`）/ 显示名兜底 / 在线 / 最后在线 | `onTopics` · `profiles()` · `loadProfile` | ✅ |
-| 权限模型（`Acs` / `Defacs`） | `acsAllows` · `parseAcs` · `acsSummary` | ✅ |
+| 权限模型（`Acs` / `Defacs`） | `acsAllows` · `parseAcs` · `acsSummary` · `updateAccessMode` | ✅ |
+| 群组：建群/建频道、成员、权限、群资料 | `createGroup` · `inviteMember` · `members` · `groupInfo` · `groupPermissionsOf` | ✅ **P7 批次一–五**：56 例单测通过；真实服务端 `group-check.mjs` **17/17**；**真机（PSN-AL00）双向群聊通过**（建群 → 两账号互发消息 / 群名 / 成员邀请·移出） |
+| 群组报文（建群/邀请/移出/默认权限） | `buildSubCreate` · `buildSetSubMode` · `buildSetDefacs` · `buildDelSubscription` | ⚠️ 同上（形状对齐上游 `MsgClientSub`/`MsgClientSet`；建群应答自动用 `ctrl.topic` 换真名） |
 | 存储端口 / 内存实现 / LRU 读缓存 | `TinodeStorage` · `MemoryTinodeStorage` · `CachedTinodeStorage` | ✅ |
 | 去重合并 / 未读 / 会话摘要 / 容量淘汰 | `mergeMessages` · `unreadOf` · `conversationSummaryOf` · `planMessageEviction` | ✅ |
 | 富文本读写与渲染 | `parseDraftyJson` · `draftyWithStyle` · `draftyInsert` · `draftySegments` | ✅ |
@@ -40,8 +42,7 @@ Tinode 即时通讯协议的 **HarmonyOS NEXT 客户端 SDK**（纯 ArkTS/TypeSc
 | 附件平台 HTTP 上传 | `HarmonyAttachmentHttp` | ⚠️ 示例不接文件服务，未验证成功路径 |
 | 系统 picker / 麦克风录音 / 语音播放 | 示例 `demo/DemoPickers.ets` | ✅ 真机验证 |
 | 入站帧守卫 / 出站帧上限 / 日志脱敏 | `parseServerMessage` · `maxFrameBytes` · `redactTopic` | ✅ |
-| 群组 / 推送 / 多端同步 / 模糊搜人 / HAR 打包 | — | ❌ 见 [TODO](#todo) |
-
+| 群组界面 · 推送 / 多端同步 / 模糊搜人 / HAR 打包 | — | ❌ 见 [TODO](#todo) |
 </details>
 
 ## 安装
@@ -86,9 +87,10 @@ tinode.publish('usrXXXXXX', { txt: 'hi' }, { mime: 'text/x-drafty' });
 2. 页面里填 `wsUrl` 与 apikey（或写进 gitignored 的 `entry/src/main/resources/rawfile/im.local.json`）。
 3. 点「连接」→「注册并登录」→ 进入会话列表。
 
-- **真收发**（换账号也能看到）：文本、富文本、表情、引用、位置卡片、已读、正在输入、撤回、历史分页、会话列表、断线重连
+- **真收发**（换账号也能看到）：文本、富文本、表情、引用、位置卡片、已读、正在输入、撤回、历史分页、会话列表、断线重连、**群聊（建群 / 邀请成员 / 群内收发）**
 - **本机演示**（不接文件服务）：图片（缩略图 + 全屏预览）、语音（按住说话 + 点击播放）、文件（卡片）
 - **两个账号对聊**：`node examples/node/selfbootstrap.mjs` 注册第二个账号拿 `uid` → 在 App「新会话」填 `usrXXXXXX`
+- **群组端到端自检**：`node examples/node/group-check.mjs`（建群 → 邀请 → **群内互发消息** → 改默认权限 → 移出 → 清理；真实服务端 **17/17** 通过）
 
 逐项操作清单见 [examples/harmony/README.md](./examples/harmony/README.md)。
 
@@ -108,7 +110,10 @@ tinode.publish('usrXXXXXX', { txt: 'hi' }, { mime: 'text/x-drafty' });
 
 ## TODO
 
-- [ ] 群组 `grp` · [ ] 推送 `set{deviceToken}`（需 AGC）
+- [x] 群组 `grp` · **P7 批次一**：纯逻辑 + 31 例单测（话题分类/命名、成员模型、群权限、群资料、四条群报文）
+- [x] 群组 `grp` · **P7 批次二**：会话/门面入口（`createGroup` / `inviteMember` / `removeMember` / `members` / `groupInfo`）+ 21 例单测（含建群改名与重连回归）
+- [ ] 群组 **P7 批次三**：示例界面（群列表/群聊/成员管理）、改群资料、真机与真实服务端验证
+- [ ] 推送 `set{deviceToken}`（需 AGC）
 - [ ] 附件上传真机验证、断点续传 / 秒传 / 图片转码
 - [ ] HAR 打包并空工程验证 · [ ] RDB 存储实现示例 · [ ] CI
 

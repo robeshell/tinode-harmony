@@ -4,8 +4,8 @@
  * 视觉令牌集中在 `demo/DemoTheme.ets`（数值照宿主 App，与 Android 基线一致）。
  */
 import { common } from '@kit.AbilityKit';
-import { DemoClient, DemoConversation, DemoListener, DemoMessage } from '../demo/DemoClient';
-import { DraftySegment } from '../tinode/Index.ts';
+import { DemoClient, DemoConversation, DemoListener, DemoMember, DemoMessage } from '../demo/DemoClient';
+import { DraftySegment, isGroupTopic } from '../tinode/Index.ts';
 import { DemoTheme, avatarColorOf, initialOf } from '../demo/DemoTheme';
 import { deliveryMarkOf, durationTextOf, sizeTextOf, timeLabelOf } from '../demo/DemoFormat';
 import {
@@ -118,6 +118,13 @@ struct Index {
   private client: DemoClient | null = null;
   @Local playingVoiceId: string = '';
   @Local previewImage: string = '';
+  // P7 群组：建群面板 / 群成员面板（示例里都用内联面板，和表情、附件面板同一套做法）
+  @Local isGroup: boolean = false;
+  @Local showCreateGroup: boolean = false;
+  @Local groupNameDraft: string = '';
+  @Local showMembers: boolean = false;
+  @Local members: DemoMember[] = [];
+  @Local inviteUid: string = '';
   private recorder: DemoVoiceRecorder = new DemoVoiceRecorder();
   private voicePlayer: DemoVoicePlayer = new DemoVoicePlayer();
 
@@ -150,7 +157,30 @@ struct Index {
       onLog: (line: string) => this.append(line),
       onConversations: (list: DemoConversation[]) => { this.conversations = list; },
       onMessages: (list: DemoMessage[]) => { this.messages = list; this.scrollToBottom(); },
-      onUploadProgress: (percent: number, note: string) => { this.uploadPercent = percent; this.uploadNote = note; }
+      onUploadProgress: (percent: number, note: string) => { this.uploadPercent = percent; this.uploadNote = note; },
+      onMembers: (topic: string, list: DemoMember[]) => {
+        if (topic === this.currentTopic) this.members = list;
+      },
+      onGroupCreated: (topic: string, name: string) => {
+        // 建群成功后直接进入新群（话题名是服务端给的 grp…，不是本地占位名）
+        this.openConversation(topic, name, false, 0);
+      },
+      onGroupName: (topic: string, name: string) => {
+        // 群名来自群自己的 desc（不是 meta.sub[].pub），拿到后更新标题与会话列表
+        if (topic === this.currentTopic) this.peerName = name;
+        for (let i = 0; i < this.conversations.length; i++) {
+          if (this.conversations[i].topic === topic && name.length > 0) {
+            const updated: DemoConversation[] = this.conversations.slice();
+            const row = updated[i];
+            updated[i] = {
+              topic: row.topic, name: name, photo: row.photo, unread: row.unread, online: row.online,
+              lastSeenMs: row.lastSeenMs, seq: row.seq, subscribed: row.subscribed,
+              accessSummary: row.accessSummary, preview: row.preview, timeText: row.timeText
+            };
+            this.conversations = updated;
+          }
+        }
+      }
     };
     this.client = new DemoClient(listener);
   }
@@ -203,6 +233,11 @@ struct Index {
     if (client === null) return;
     client.openTopic(topic);
     this.currentTopic = topic;
+    // P7：群话题（grp…/chn…）在聊天页多一个「成员」入口
+    this.isGroup = isGroupTopic(topic);
+    this.showMembers = false;
+    this.members = [];
+    if (this.isGroup) client.loadGroupInfo(topic);      // 群名在群自己的 desc 里
     this.peerName = name.length > 0 ? name : topic;
     this.peerOnline = online;
     this.peerSeen = seenMs > 0 ? `最后在线 ${timeLabelOf(seenMs, Date.now())}` : '';
@@ -454,11 +489,17 @@ struct Index {
           const client = this.clientOrNull();
           if (client !== null) client.refreshConversations();
         })
+        Text('建群').fontSize(13).fontColor(DemoTheme.brand).onClick(() => {
+          this.showCreateGroup = !this.showCreateGroup;
+          if (this.showCreateGroup) this.groupNameDraft = '';
+        })
         Text('能力').fontSize(13).fontColor(DemoTheme.brand).onClick(() => { this.view = 3; })
         Text('退出').fontSize(13).fontColor(DemoTheme.textSecondary).onClick(() => { this.view = 0; })
       }
       .width('100%').height(DemoTheme.appBarHeight).padding({ left: 16, right: 16 })
       .backgroundColor(Color.White)
+
+      if (this.showCreateGroup) { this.createGroupPanel() }
 
       Row({ space: 8 }) {
         TextInput({ text: $$this.newTopic, placeholder: '新会话：输入 usrXXXXXX' })
@@ -684,6 +725,86 @@ struct Index {
     }.width('100%')
   }
 
+  /**
+   * P7：建群面板。建群在协议上走 `sub`（不是 `set`）：本地先造 `new…` 占位名，
+   * 服务端在应答里换成真正的 `grp…`（SDK 已自动完成改名与登记）。
+   */
+  @Builder
+  createGroupPanel() {
+    Column({ space: 8 }) {
+      Row() {
+        Text('建群（群聊）').fontSize(15).fontColor(DemoTheme.textSecondary).layoutWeight(1)
+        Text('收起').fontSize(13).fontColor(DemoTheme.brand).onClick(() => { this.showCreateGroup = false; })
+      }.width('100%')
+      Row({ space: 8 }) {
+        TextInput({ text: $$this.groupNameDraft, placeholder: '群名，例如：项目群' })
+          .layoutWeight(1).height(36).backgroundColor(DemoTheme.fieldFill).borderRadius(18)
+        Button('创建').height(36).borderRadius(18).backgroundColor(DemoTheme.brand).fontSize(13)
+          .onClick(() => {
+            const client = this.clientOrNull();
+            const name = this.groupNameDraft.trim();
+            if (client === null || name.length === 0) { this.uploadNote = '群名不能为空'; return; }
+            this.showCreateGroup = false;
+            this.uploadNote = `正在建群：${name}…`;
+            client.createGroup(name);
+          })
+      }.width('100%')
+      Text('建群后会自动打开新群；在群里发消息就是群聊，对端要先被邀请进来').fontSize(11).fontColor(DemoTheme.textHint)
+    }
+    .width('100%').padding(12).backgroundColor(Color.White)
+  }
+
+  /** P7：群成员面板 —— 成员列表（uid/名字/权限）+ 邀请（uid + 整串权限）+ 移出。 */
+  @Builder
+  membersPanel() {
+    Column({ space: 8 }) {
+      Row() {
+        Text(`群成员（${this.members.length}）`).fontSize(15).fontColor(DemoTheme.textSecondary).layoutWeight(1)
+        Text('刷新').fontSize(13).fontColor(DemoTheme.brand).onClick(() => {
+          const client = this.clientOrNull();
+          if (client !== null) client.refreshMembers(this.currentTopic);
+        })
+        Text('收起').fontSize(13).fontColor(DemoTheme.brand).margin({ left: 10 })
+          .onClick(() => { this.showMembers = false; })
+      }.width('100%')
+      if (this.members.length === 0) {
+        Text('（还没拿到成员列表：确认已订阅该群，或点「刷新」）').fontSize(11).fontColor(DemoTheme.textHint)
+      } else {
+        ForEach(this.members, (item: DemoMember) => {
+          Row({ space: 8 }) {
+            Text(item.online ? '●' : '○').fontSize(10)
+              .fontColor(item.online ? DemoTheme.success : DemoTheme.textHint)
+            Text(item.name).fontSize(13).layoutWeight(1)
+            Text(item.mode).fontSize(11).fontColor(DemoTheme.textHint)
+            Text(item.user === this.myUid ? '（我）' : '移出').fontSize(12)
+              .fontColor(item.user === this.myUid ? DemoTheme.textHint : DemoTheme.danger)
+              .onClick(() => {
+                if (item.user === this.myUid) return;
+                const client = this.clientOrNull();
+                if (client !== null) client.removeMember(this.currentTopic, item.user);
+              })
+          }.width('100%')
+        }, (item: DemoMember) => item.user)
+      }
+      Row({ space: 8 }) {
+        TextInput({ text: $$this.inviteUid, placeholder: '被邀请人 uid：usrXXXXXX' })
+          .layoutWeight(1).height(34).backgroundColor(DemoTheme.fieldFill).borderRadius(17)
+        Button('邀请 JRWPA').height(34).borderRadius(17).backgroundColor(DemoTheme.brand).fontSize(12)
+          .onClick(() => {
+            const client = this.clientOrNull();
+            const uid = this.inviteUid.trim();
+            if (client === null || uid.length === 0) { this.uploadNote = 'uid 不能为空'; return; }
+            this.uploadNote = `正在邀请 ${uid}…`;
+            client.inviteMember(this.currentTopic, uid, 'JRWPA');
+            this.inviteUid = '';
+          })
+      }.width('100%')
+      Text('权限是整串字母：J 加入 / R 读 / W 写 / P 在线 / A 审批 / S 邀请 / D 删除 / O 所有者')
+        .fontSize(10).fontColor(DemoTheme.textHint)
+    }
+    .width('100%').padding(12).backgroundColor(Color.White)
+  }
+
   /** 表情面板：点一下插入输入框（demo 静态表情表，真实产品从服务端/资源包取）。 */
   @Builder
   emojiPanel() {
@@ -773,6 +894,15 @@ struct Index {
           Text(this.peerOnline ? '在线' : (this.peerSeen.length > 0 ? this.peerSeen : this.currentTopic))
             .fontSize(11).fontColor(this.peerOnline ? DemoTheme.success : DemoTheme.textHint)
         }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        if (this.isGroup) {
+          Text('成员').fontSize(13).fontColor(DemoTheme.brand).onClick(() => {
+            this.showMembers = !this.showMembers;
+            if (this.showMembers) {
+              const client = this.clientOrNull();
+              if (client !== null) client.refreshMembers(this.currentTopic);
+            }
+          })
+        }
         Text('更早').fontSize(13).fontColor(DemoTheme.brand).onClick(() => {
           const client = this.clientOrNull();
           if (client !== null && this.messages.length > 0) client.loadHistory(this.currentTopic, this.messages[0].seq, 30);
@@ -784,6 +914,8 @@ struct Index {
       }
       .width('100%').height(DemoTheme.appBarHeight).padding({ left: 12, right: 12 })
       .backgroundColor(Color.White).border({ width: { bottom: 0.5 }, color: DemoTheme.divider })
+
+      if (this.showMembers && this.isGroup) { this.membersPanel() }
 
       if (this.messages.length === 0) {
         Column({ space: 6 }) {

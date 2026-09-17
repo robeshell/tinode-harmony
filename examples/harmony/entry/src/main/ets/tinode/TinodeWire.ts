@@ -20,6 +20,9 @@
 
 import type { Drafty } from './Drafty.ts';
 import type { ImHead } from './TinodeHead.ts';
+// 权限串的归一化只认一套字母顺序（`TinodeAcs.ACS_ABILITIES`），所以群组报文构造复用它，
+// 而不是在 wire 层再抄一遍。`TinodeAcs.ts` 不 import 任何模块，不会形成循环依赖。
+import { normalizeAccessMode } from './TinodeAcs.ts';
 
 /** 客户端协议版本（`Tinode.java:85` VERSION，进 `hi.ver`）。 */
 export const IM_PROTO_VERSION = '0.22';
@@ -270,6 +273,116 @@ export function buildSetPublicDesc(id: string, topic: string, fn: string, photo?
   return JSON.stringify({ set: { id: id, topic: topic, desc: { public: card } } });
 }
 
+// ── 群组（P7）：建群与成员管理 ──────────────────────────────────────────────
+//
+// 报文形状来源（都是 Apache-2.0 的官方 Java SDK）：
+//   `model/MsgClientSub{id,topic,set,get}`、`model/MsgClientSet{id,topic,desc,sub,tags,cred}`、
+//   `model/MsgSetMeta{desc,sub,tags,cred}`、`model/MetaSetDesc{defacs,public,private}`、
+//   `model/MetaSetSub{user,mode}`、`model/MsgClientDel{id,topic,what,user}`，
+//   建群流程见 `Topic.java:880-935`（`sub` 带 `set`）+ `:925-928`（应答改名）+ `:1308`（`setSubscription`）。
+
+/** `desc.defacs`：新成员 / 匿名用户的默认权限（上游 `Defacs{auth,anon}`）。 */
+export interface ImDefacsBody {
+  auth?: string;
+  anon?: string;
+}
+
+/**
+ * `set.desc` 的本端形状（上游 `MetaSetDesc`）：群名片 + 默认权限。
+ * **不带** `id`/`topic` —— 那是外层 `sub`/`set` 的字段（见 `MsgSetMeta` 只有 desc/sub/tags/cred）。
+ */
+export interface ImSetDesc {
+  public?: ImCard;
+  defacs?: ImDefacsBody;
+}
+
+/** `set.sub`：某个订阅者的权限（上游 `MetaSetSub{user,mode}`）；`user` 省略 = 改我自己的。 */
+export interface ImSetSubBody {
+  user?: string;
+  mode: string;
+}
+
+/** `sub.set` 的载荷（上游 `MsgSetMeta`）：**不含** `id`/`topic`。 */
+export interface ImSetPayload {
+  desc?: ImSetDesc;
+  sub?: ImSetSubBody;
+  tags?: string[];
+}
+
+/** 建群/建频道时可选的初始资料（对应 `ComTopic.subscribe()` 里那份 `MsgSetMeta`）。 */
+export interface ImCreateTopicOptions {
+  /** 群名（`desc.public.fn`）。 */
+  name?: string;
+  /** 群头像 ref（`desc.public.photo`）。 */
+  photo?: string;
+  /** 默认权限（`desc.defacs`）；**不传 = 用服务端默认**（本端不猜服务端默认值）。 */
+  defacs?: ImDefacsBody;
+  /** 话题标签（`set.tags`）。 */
+  tags?: string[];
+}
+
+/**
+ * `sub{topic:"new…", set:{desc:{public,defacs}, tags}}`：**创建群 / 频道**（P7）。
+ *
+ * 建群走的是 `sub` 而不是 `set`：客户端先自己造一个 `newXXXX` 名字（见 `TinodeGroup.newGroupTopicName`），
+ * 服务端接受后把**真正的名字放在应答 `ctrl.topic`**、把算好的权限放在 `ctrl.params.acs`
+ * （上游 `Topic.java:925-928` 的 `setName(msg.ctrl.topic)`）。所以调用方必须用应答里的名字替换本地名。
+ * `topic` 为空返回 `''`（参数非法，不发帧）。
+ */
+export function buildSubCreate(id: string, topic: string, options: ImCreateTopicOptions): string {
+  const name = topic.trim();
+  if (name.length === 0) return '';
+  const desc: ImSetDesc = {};
+  const card: ImCard = {};
+  if (options.name !== undefined && options.name.trim().length > 0) card.fn = options.name.trim();
+  if (options.photo !== undefined && options.photo.trim().length > 0) card.photo = options.photo.trim();
+  if (card.fn !== undefined || card.photo !== undefined) desc.public = card;
+  if (options.defacs !== undefined) desc.defacs = options.defacs;
+  const set: ImSetPayload = { desc: desc };
+  if (options.tags !== undefined && options.tags.length > 0) set.tags = options.tags;
+  return JSON.stringify({ sub: { id: id, topic: name, set: set } });
+}
+
+/**
+ * `set{topic, sub:{user,mode}}`：**邀请成员**或**改成员权限**（上游 `Topic.invite` / `updateMode`
+ * 都落到 `setSubscription(new MetaSetSub(uid, mode))`）。`user` 传空串 = 改我自己的订阅权限。
+ * `mode` 是**整串**权限（上游也是先本地算出新值再发整串，不是 `+R-W` 增量）；
+ * 归一化后为空返回 `''`（例如传了 `"X"` 这种非法字母），调用方据此提示而不是发脏帧。
+ */
+export function buildSetSubMode(id: string, topic: string, user: string, mode: string): string {
+  const normalized = normalizeAccessMode(mode);
+  if (normalized.length === 0) return '';
+  const body: ImSetSubBody = { mode: normalized };
+  const uid = user.trim();
+  if (uid.length > 0) body.user = uid;
+  return JSON.stringify({ set: { id: id, topic: topic.trim(), sub: body } });
+}
+
+/**
+ * `set{topic, desc:{defacs:{auth,anon}}}`：改群的**默认权限**（上游 `updateDefAcs`）。
+ * 空串表示"这一侧不改"；两侧都空返回 `''`（没有可发的变更）。
+ */
+export function buildSetDefacs(id: string, topic: string, auth: string, anon: string): string {
+  const body: ImDefacsBody = {};
+  const authMode = normalizeAccessMode(auth);
+  const anonMode = normalizeAccessMode(anon);
+  if (authMode.length > 0) body.auth = authMode;
+  if (anonMode.length > 0) body.anon = anonMode;
+  if (body.auth === undefined && body.anon === undefined) return '';
+  return JSON.stringify({ set: { id: id, topic: topic.trim(), desc: { defacs: body } } });
+}
+
+/**
+ * `del{topic, what:"sub", user}`：**把某个成员移出群**（上游 `Tinode.delSubscription` → `MsgClientDel`）。
+ * 服务端**拒绝 user 为空**的请求（`MsgClientDel` 注释），所以 `user` 为空返回 `''`；
+ * 「封禁但保留订阅」不是删除，而是把它 `mode` 设成 `'N'`（`Topic.eject(uid, ban=true)` → `invite(uid, "N")`）。
+ */
+export function buildDelSubscription(id: string, topic: string, user: string): string {
+  const uid = user.trim();
+  if (uid.length === 0) return '';
+  return JSON.stringify({ del: { id: id, topic: topic.trim(), what: 'sub', user: uid } });
+}
+
 /**
  * `acc` 失败的专用文案（P3-min）：409 在 `acc` 语境下是"用户名已存在/冲突"，
  * 与 topic 冲突的含义不同；其余码回落到通用文案。
@@ -385,6 +498,11 @@ export interface ImCtrlParams {
   maxMessageSize?: number;
   maxSubscriberCount?: number;
   maxTagLength?: number;
+  /**
+   * **建群应答里**服务端算好的我方权限（上游 `Topic.java:918-921` 的 `params.get("acs")`，
+   * 序列化成 `{given,want,mode}`）。保持 `Object` 不细化，解析交给 `TinodeAcs.parseAcs`。
+   */
+  acs?: Object;
 }
 
 /**
@@ -450,6 +568,11 @@ export interface ImMetaSub {
   online?: boolean;
   /** 对方的公开名片（`TheCard`）。 */
   pub?: ImCard;
+  /**
+   * 该订阅的权限（上游 `Acs{given,want,mode}`）：群成员列表（`get{what:"sub"}`）靠它拿成员权限（P7）。
+   * 保持 `Object` 不细化，解析交给 `TinodeAcs.parseAcs`（与 `ImMeta.desc` 同口径）。
+   */
+  acs?: Object;
 }
 
 /** Tinode 公开名片（`TheCard`）：只读 `fn`（显示名）与 `photo`（头像 ref）。 */
@@ -557,6 +680,18 @@ export function ctrlOk(code: number): boolean {
 }
 
 /**
+ * 「服务端**接受了**这个请求」：`200 ≤ code < 400`。
+ *
+ * 与 `ctrlOk`（严格 2xx）分开，是因为 Tinode 对**幂等写操作**会回 3xx：值没变时回 **304 Not Modified**，
+ * 已订阅时回 **303 See Other** —— 这些都不是失败。上游 promise 的判定正是这条：
+ * `Tinode.java:713-714`（`code >= STATUS_OK && code < STATUS_BAD_REQUEST` → `future.resolve`）。
+ * 真机/真实服务端验证：对同一个群重复发相同的 `set{desc:{defacs}}` 会拿到 304。
+ */
+export function ctrlAccepted(code: number): boolean {
+  return code >= 200 && code < 400;
+}
+
+/**
  * 会话是否该放弃重连：鉴权类错误重连也没用（401/403），其余（网络、5xx、503）继续退避重试。
  * 依据 `TinodeImClient.kt:418-441` 的 `ensureConnected` 语义与 SDK 的 `ExpBackoff`（`:8-12`：
  * 基础 1 s、2^attempt 上限 shift 10）。
@@ -574,6 +709,9 @@ export function ctrlFailureText(code: number, serverText: string): string {
   if (code === IM_CODE_NOT_FOUND) return '会话不存在或已被删除';
   if (code >= 500) return '消息服务暂时不可用，请稍后重试';
   if (code >= 400) return '消息请求被拒绝';
+  // 3xx：协议里多是"没有变化/已订阅"（304 Not Modified / 303 See Other）。
+  // 写操作（幂等）用 `ctrlAccepted` 当成功；这里只给"被当成失败时"一个如实的文案。
+  if (code >= 300) return '服务端没有修改任何内容（3xx）';
   return '消息服务返回了未知错误';
 }
 

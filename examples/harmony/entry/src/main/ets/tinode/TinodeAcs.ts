@@ -55,6 +55,72 @@ export function normalizeAccessMode(mode: string | null | undefined): string {
   return letters.join('');
 }
 
+/** 能力字母对应的位（顺序与 `ACS_ABILITIES` 一致，对齐上游 `AcsHelper:15-22` 的 `MODE_*`）。 */
+const ACS_MODE_BITS: number[] = [0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80];
+
+/** 权限串 → 位掩码。非法字母返回 -1；含 `N` 或空串 → 0（"显式无权限"）。 */
+function decodeAccessMask(mode: string): number {
+  if (mode.length === 0) return -1;
+  let mask = 0;
+  for (let i = 0; i < mode.length; i++) {
+    const letter = mode.charAt(i).toUpperCase();
+    if (letter === 'N') return 0;
+    const index = ACS_ABILITIES.indexOf(letter);
+    if (index < 0) return -1;
+    mask |= ACS_MODE_BITS[index];
+  }
+  return mask;
+}
+
+/** 位掩码 → 权限串（0 → `'N'`，与上游 `AcsHelper.encode` 同口径）。 */
+function encodeAccessMask(mask: number): string {
+  if (mask === 0) return 'N';
+  let out = '';
+  for (let i = 0; i < ACS_ABILITIES.length; i++) {
+    if ((mask & ACS_MODE_BITS[i]) !== 0) out += ACS_ABILITIES[i];
+  }
+  return out;
+}
+
+/**
+ * 应用一次权限修改（P7 群成员权限用；对齐上游 `AcsHelper.update:222-260`）：
+ *
+ * - **整串替换**：`updateAccessMode('RW', 'JSA')` → `'JAS'`（归一化后按标准顺序）；
+ * - **增量**：`updateAccessMode('RW', '+P-S')` → `'RWP'`，`'-R'` 去掉读权限；
+ * - `'N'` 在增量里是"无操作"（上游 `continue`），在整串里是"显式无权限"；
+ * - **非法输入返回 `null`**：未知字母、`'R+W'`（字母写在增量前）、`'+'` 后为空。
+ *   调用方据此提示，**不要**把脏值发出去 —— 服务端要的是整串，算错就是改错别人的权限；
+ * - 空修改串返回当前权限的整串（无变更也给出可发的值）。
+ */
+export function updateAccessMode(mode: string | null | undefined,
+  change: string | null | undefined): string | null {
+  let current = decodeAccessMask(normalizeAccessMode(mode));
+  if (current < 0) current = 0;
+  const delta = change === null || change === undefined ? '' : change.trim();
+  if (delta.length === 0) return encodeAccessMask(current);
+  const first = delta.charAt(0);
+  if (first !== '+' && first !== '-') {
+    const parsed = decodeAccessMask(delta.toUpperCase());
+    return parsed < 0 ? null : encodeAccessMask(parsed);
+  }
+  let mask = current;
+  let at = 0;
+  while (at < delta.length) {
+    const action = delta.charAt(at);
+    if (action !== '+' && action !== '-') return null;
+    at += 1;
+    const start = at;
+    while (at < delta.length && delta.charAt(at) !== '+' && delta.charAt(at) !== '-') at += 1;
+    const letters = delta.substring(start, at);
+    if (letters.length === 0) return null;
+    const part = decodeAccessMask(letters.toUpperCase());
+    if (part < 0) return null;
+    if (part === 0) continue;
+    mask = action === '+' ? (mask | part) : (mask & ~part);
+  }
+  return encodeAccessMask(mask);
+}
+
 /** `O`（所有者）隐含全部权限。 */
 export function acsIsOwner(mode: string | null | undefined): boolean {
   return normalizeAccessMode(mode).indexOf('O') >= 0;

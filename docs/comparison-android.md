@@ -18,7 +18,7 @@
 | 撤回 | ✅ 发撤回标记 + 本地占位 | ✅ `del{what:"msg"}` / 本地撤回标记（同口径，服务端不真删） |
 | 删除 topic / 消息 | ✅ | ✅ `deleteTopic` / `deleteMessages` |
 | **附件上传/下载** | ✅ 官方 SDK `file/upload` + `AttachFileApi` | ❌ **不在 SDK 内**（宿主自己调后端 `file/upload`；SDK 只搬运 Drafty 里的 ref） |
-| **群组 `grp`** | ❌ Android 客户端也没做（源码里 0 处 group） | ❌ 有意留白（见 README） |
+| **群组 `grp`** | ❌ Android 客户端也没做（源码里 0 处 group） | ⚠️ **P7 批次一–四：协议层 + 门面 + 示例界面（建群/成员）**（56 例单测）；**真实服务端 17/17**（含群内双向收发）；真机群聊全链路未跑完 |
 | **推送 `set{deviceToken}`** | 有协议侧能力（未接推送平台） | ❌ 已从公开面移除（`expires` 需平台 Push Kit 真值） |
 | 多端同步 / 断线后再同步 | ✅ 官方 SDK 有 topic 与消息同步逻辑 | ❌ 只保证重连（`hi`+`login`），**重订阅由宿主负责** |
 | Drafty | ✅ 官方 SDK 读+写、含格式化 | ⚠️ **读侧子集**（`txt/ent` + 10 类实体白名单；`fmt` 不消费）+ `encodeDrafty` 写回 |
@@ -60,7 +60,7 @@
 ## 5. Roadmap（与 Android 的差距补齐顺序）
 
 1. 附件：把 `file/upload` + 下载/缓存做成可选模块（或文档化"宿主负责"的最佳实践）；
-2. 群组：`grp` 主题与成员（协议面 + 权限）；
+2. 群组：`grp` 主题与成员（协议面 + 权限）——**协议层与门面已完成（P7 批次一/二）**，还差 UI；
 3. 推送：`set{what:"deviceToken"}`（等平台 Push Kit 真值 + AGC 开通）；
 4. 断线后再同步：把"重订阅 + 补历史"从宿主收回 SDK（可选开关）；
 5. 富文本：`fmt` 的偏移语义与渲染（Android 自己在两条路径上不一致，需要样本对齐）。
@@ -93,7 +93,7 @@
 | 推送（`MsgClientSet` + `setDeviceToken`） | ✅ | ❌（已移除） | 中 |
 | 本地存储/缓存与同步（`Storage`/`LocalData`） | ✅ | ⚠️ 只有端口，无缓存策略 | 中 |
 | 用户资料与权限（`User`/`Acs`/`Defacs`/`LastSeen`） | ✅ | ❌ | 中 |
-| 群组（通过 `ComTopic` + meta） | ✅ **SDK 支持** | ❌ | 大（但我们与安卓 App 都不用） |
+| 群组（通过 `ComTopic` + meta） | ✅ **SDK 支持** | ⚠️ **P7 批次一/二**：`TinodeGroup.ts` 纯逻辑 + 四条群报文 + 会话/门面入口（`createGroup`/`inviteMember`/`members`/`groupInfo`）；**界面未做** | 小（还剩界面与真机） |
 | Drafty | ✅ 读+写+格式化 | ⚠️ 读侧子集（`fmt` 不消费） | 中 |
 | presence/在线状态 | ✅ 模型化 | ⚠️ 只透传 `pres` 回调 | 小 |
 | 异步/重试框架（`PromisedReply`/`ExpBackoff`） | ✅ | ⚠️ 只有退避计算 | 小 |
@@ -110,7 +110,7 @@
 | P4 | ✅ **已完成（策略 + 装饰器）**：`TinodeStore.ts`（去重合并/未读/摘要/淘汰/草稿预览）+ `CachedTinodeStorage`（LRU 读缓存，写操作失效）；RDB/文件实现仍由宿主提供 | 已交付 |
 | P5 | ✅ **已完成**（2026-09-17）：`meta.sub[]`/`meta.desc` → 会话轮廓（名字/头像/位点/在线/最后在线）+ `me` 自动订阅 + `onTopics`/`profileOf()` + 显示名三级兜底 + `loadProfile`/`loadSubscriptions`/`updatePublicName` + `Acs`/`Defacs` 权限模型（`TinodeAcs.ts`）。**模糊搜人不在 Tinode WS 协议里**（上游 Java SDK 也没有），需要服务端 REST/自有目录 | 已交付 |
 | P6 | ✅ **已完成**（2026-09-17）：写侧（构造/样式/实体/插入删除位移/截断）+ 渲染模型 `draftySegments`；偏移统一 UTF-16 code unit（与上游解析路径一致） | 已交付 |
-| P7 | **群组**（`grp` + 成员/权限） | 大（2–3 批） |
+| P7 | **群组**（`grp` + 成员/权限）：**批次一/二/三已完成**（纯逻辑 + 报文 + 会话/门面入口，55 例单测；`examples/node/group-check.mjs` 真实服务端 14/14）；还剩示例界面 | 小（还剩界面；**HarmonyOS 真机未验证**） |
 | P8 | **推送**（等平台 Push Kit 真值 + AGC） | 小（受外部条件阻塞） |
 
 **结论（坦白说）**：现在的 SDK 只够"P2P 文本/自定义消息 + 宿主自管存储"这种用法；

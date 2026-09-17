@@ -20,16 +20,23 @@ import type { TinodeTopicState } from './TinodeTopics.ts';
 import { applyPresence, mergeProfiles, profileFromDesc, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
 import type { TinodeProfile } from './TinodeMeta.ts';
 import type { TinodeAuth } from './TinodeSession.ts';
-import { encodeBasicSecret, isValidBasicLogin } from './TinodeWire.ts';
+import { encodeBasicSecret, isValidBasicLogin, ctrlAccepted, ctrlOk, ctrlFailureText } from './TinodeWire.ts';
 import { ImSession, defaultSessionConfig } from './TinodeSession.ts';
 import type { ImSessionConfig, ImSessionState, ImTransport } from './TinodeSession.ts';
-import type { ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, DelRange } from './TinodeWire.ts';
+import type {
+  ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, DelRange, ImCreateTopicOptions, ImDefacsBody
+} from './TinodeWire.ts';
 import { redactTopic, tinodeLogDetail, tinodeLogFailure } from './TinodeLog.ts';
 import { buildPub } from './TinodeWire.ts';
 import { MemoryTinodeStorage } from './TinodeStorage.ts';
 import type { TinodeStorage } from './TinodeStorage.ts';
 import { tinodeMessageFromData } from './TinodeMessage.ts';
 import type { TinodeDraft, TinodeMessage, TinodeTopic } from './TinodeMessage.ts';
+// P7 群组：门面负责「建群/成员/权限」的报文编排与应答归因，纯逻辑与模型在 TinodeGroup.ts。
+import { groupInfoFromMeta, membersFromMeta, newChannelTopicName, newGroupTopicName } from './TinodeGroup.ts';
+import type { TinodeGroupInfo, TinodeMember } from './TinodeGroup.ts';
+import { parseAcs } from './TinodeAcs.ts';
+import type { TinodeDefacs } from './TinodeAcs.ts';
 
 /** 宿主回调（门面已经把消息落库，再交给宿主做业务投影）。 */
 /** 单帧默认上限：Tinode 服务端默认 `max_message_size` ≈ 256 KB。 */
@@ -102,6 +109,51 @@ export interface TinodeSubscribeOptions {
   limit?: number;
 }
 
+/** P7：`createGroup()` 的初始资料。 */
+export interface TinodeCreateGroupOptions {
+  /** 群头像 ref（`desc.public.photo`）。 */
+  photo?: string;
+  /** 默认权限（`desc.defacs`）；**不传 = 用服务端默认**（本端不猜服务端默认值）。 */
+  defacs?: TinodeDefacs;
+  /** 话题标签（`set.tags`）。 */
+  tags?: string[];
+  /** `true` 建**频道**（占位名 `nch…` → 真正的 `chn…`）。 */
+  channel?: boolean;
+}
+
+/** P7：建群结果。 */
+export interface TinodeGroupCreated {
+  /** 客户端造的**占位名**（`new…`/`nch…`），只在本端出现过。 */
+  requestedTopic: string;
+  /** 服务端给的**真正话题名**（`grp…`/`chn…`；服务端没改名时与占位名相同）。 */
+  topic: string;
+  /** 群名（`desc.public.fn`），没传就是空串。 */
+  name: string;
+  /** 服务端是否真的改过名（老部署可能不改）。 */
+  renamed: boolean;
+  /** 服务端算好的**我的权限**（`ctrl.params.acs.mode`；没下发时为空串）。 */
+  mode: string;
+}
+
+/**
+ * P7：一次「有 id 的请求」的应答。`ctrl` 与 `meta` 只有一个非空 ——
+ * `set`/`del`/`sub` 型请求回 `ctrl`，`get{what:"sub"|"desc"}` 型请求回 `meta`；
+ * 而 **`get` 失败时服务端回的是 `ctrl`**（带错误码），所以两种都要能兑现同一个请求。
+ */
+export interface TinodeReply {
+  ok: boolean;
+  code: number;
+  text: string;
+  ctrl: ImCtrl | null;
+  meta: ImMeta | null;
+}
+
+/** 门面内部：等在某个报文 id 上的请求。 */
+interface TinodePendingReply {
+  resolve: (reply: TinodeReply) => void;
+  reject: (reason: string) => void;
+}
+
 export class Tinode {
   private readonly session: ImSession;
   private readonly store: TinodeStorage;
@@ -117,6 +169,14 @@ export class Tinode {
   /** P3-min：注册/登录等待中的 Promise 回调（一次一个，够用且简单）。 */
   private pendingAuth: ((auth: TinodeAuth) => void) | null = null;
   private pendingAuthReject: ((reason: string) => void) | null = null;
+  /**
+   * P7：门面里**有 id 的群组请求**（建群/邀请/移出/改默认权限/成员列表/群资料）。
+   * 按报文 id 归因：`ctrl` 到达走 `settleCtrl`，`meta` 到达走 `settleMeta`；
+   * 断线时由 `rejectAllPending` 统一拒掉（避免 Promise 永远挂着）。
+   */
+  private pendingReplies: Map<string, TinodePendingReply> = new Map();
+  /** 建群占位名的计数器（同一毫秒内连续建群也不会撞名，见 `TinodeGroup.uniqueTopicSuffix`）。 */
+  private topicNameCounter: number = 0;
 
   constructor(options: TinodeOptions) {
     this.hooks = options.hooks === undefined ? {} : options.hooks;
@@ -132,6 +192,8 @@ export class Tinode {
           this.ensureMeSubscribed();
         } else {
           this.meSubscribed = false;
+          // P7：断线时把在途的群组请求全部拒掉 —— 否则那些 Promise 会一直挂着不落地。
+          this.rejectAllPending('连接已断开，请重试');
         }
         const done = this.hooks.onState;
         if (done !== undefined) done(state);
@@ -148,6 +210,7 @@ export class Tinode {
       },
       onMeta: (meta: ImMeta) => {
         this.absorbMeta(meta);                    // P5-min：把 meta.sub[] 变成会话列表
+        this.settleMeta(meta);                    // P7：成员列表/群资料请求等着这份 meta
         const done = this.hooks.onMeta;
         if (done !== undefined) done(meta);
       },
@@ -156,6 +219,7 @@ export class Tinode {
         if (done !== undefined) done(note);
       },
       onCtrl: (ctrl: ImCtrl) => {
+        this.settleCtrl(ctrl);                    // P7：建群/邀请/移出/改默认权限等应答
         const done = this.hooks.onCtrl;
         if (done !== undefined) done(ctrl);
       },
@@ -356,6 +420,204 @@ export class Tinode {
   /** P3 余项：加待验证凭据（邮箱/手机号）。返回报文 id。 */
   addCredential(meth: string, val: string): string {
     return this.session.addCredential(meth, val);
+  }
+
+  // ── P7：群组 ───────────────────────────────────────────────────────────────
+  //
+  // 建群走的是 `sub` 而不是 `set`：客户端先造占位名 `new…`，服务端在应答 `ctrl.topic` 里给出真正的
+  // `grp…`（上游 `Topic.java:96`、`:925-928`）。所以 `createGroup()` 返回的 `topic` 才是可用的名字。
+
+  /** 把一条请求登记为"等在 id 上"（`ctrl` 或 `meta` 到达时兑现）。 */
+  private awaitReply(id: string): Promise<TinodeReply> {
+    return new Promise<TinodeReply>((resolve: (reply: TinodeReply) => void,
+      reject: (reason: string) => void) => {
+      this.pendingReplies.set(id, { resolve: resolve, reject: reject });
+    });
+  }
+
+  /** `ctrl` 到达：兑现等在它上面的请求（成功或失败都算"有结论"）。 */
+  private settleCtrl(ctrl: ImCtrl): void {
+    const id = ctrl.id === undefined ? '' : ctrl.id;
+    if (id.length === 0) return;
+    const pending = this.pendingReplies.get(id);
+    if (pending === undefined) return;
+    this.pendingReplies.delete(id);
+    pending.resolve({
+      ok: ctrlOk(ctrl.code),
+      code: ctrl.code,
+      text: ctrl.text === undefined ? '' : ctrl.text,
+      ctrl: ctrl,
+      meta: null
+    });
+  }
+
+  /** `meta` 到达（`get{what:"sub"|"desc"}` 的应答）：兑现等在它上面的请求。 */
+  private settleMeta(meta: ImMeta): void {
+    const id = meta.id === undefined ? '' : meta.id;
+    if (id.length === 0) return;
+    const pending = this.pendingReplies.get(id);
+    if (pending === undefined) return;
+    this.pendingReplies.delete(id);
+    pending.resolve({ ok: true, code: 200, text: '', ctrl: null, meta: meta });
+  }
+
+  /** 断线等"永远不会有应答"的情况：把在途请求全部拒掉，不让 Promise 悬着。 */
+  private rejectAllPending(reason: string): void {
+    if (this.pendingReplies.size === 0) return;
+    const rows: TinodePendingReply[] = [];
+    this.pendingReplies.forEach((pending: TinodePendingReply) => { rows.push(pending); });
+    this.pendingReplies = new Map<string, TinodePendingReply>();
+    for (let i = 0; i < rows.length; i++) rows[i].reject(reason);
+  }
+
+  /** 发一个"改一下"的群组请求（邀请/移出/改默认权限/改成员权限）：成功 resolve，失败 reject 可读文案。 */
+  private runGroupCtrl(id: string): Promise<void> {
+    if (id.length === 0) return Promise.reject('请求未发出：连接未就绪或参数不合法');
+    return new Promise<void>((resolve: () => void, reject: (reason: string) => void) => {
+      this.pendingReplies.set(id, {
+        resolve: (reply: TinodeReply) => {
+          if (reply.meta !== null) {
+            // `set`/`del` 不该回 meta；如实报错而不是当成功。
+            reject('服务端应答格式不符（期望 ctrl，收到 meta）');
+            return;
+          }
+          // 幂等写操作：3xx 不是失败（304 Not Modified / 303 已订阅），上游同样 resolve。
+          if (ctrlAccepted(reply.code)) { resolve(); return; }
+          reject(ctrlFailureText(reply.code, reply.text));
+        },
+        reject: reject
+      });
+    });
+  }
+
+  /** 发一个"拉一下"的群组请求（成员列表/群资料）：结果以 `meta` 回来；失败通常是 `ctrl{4xx}`。 */
+  private runGroupMeta(id: string): Promise<ImMeta> {
+    if (id.length === 0) return Promise.reject('请求未发出：连接未就绪');
+    return new Promise<ImMeta>((resolve: (meta: ImMeta) => void, reject: (reason: string) => void) => {
+      this.pendingReplies.set(id, {
+        resolve: (reply: TinodeReply) => {
+          if (reply.meta !== null) { resolve(reply.meta); return; }
+          reject(ctrlFailureText(reply.code, reply.text));
+        },
+        reject: reject
+      });
+    });
+  }
+
+  /**
+   * P7：**建群 / 建频道**。
+   *
+   * ```ts
+   * const g = await tinode.createGroup('项目群', { defacs: { auth: 'JRWPA', anon: 'N' } });
+   * tinode.subscribe(g.topic);                    // ← 用返回的 topic（真正的 grp…），不是占位名
+   * ```
+   *
+   * 前置：`state() === 'ready'`。成功返回真正的 `topic` 与我在群里的 `mode`；
+   * 失败 reject 一条用户可读文案（服务端拒绝、断线、未就绪都走这里）。
+   */
+  createGroup(name: string, options?: TinodeCreateGroupOptions): Promise<TinodeGroupCreated> {
+    if (this.session.state() !== 'ready') return Promise.reject('连接尚未就绪，请稍后再试');
+    const opts: TinodeCreateGroupOptions = options === undefined ? {} : options;
+    const groupName = name.trim();
+    // 占位名：`new…`（群）或 `nch…`（频道）。随机数用 Math.random()，计数器保证同毫秒不撞名。
+    this.topicNameCounter += 1;
+    const requested = opts.channel === true
+      ? newChannelTopicName(Date.now(), this.topicNameCounter, Math.random())
+      : newGroupTopicName(Date.now(), this.topicNameCounter, Math.random());
+    const frameOptions: ImCreateTopicOptions = {};
+    if (groupName.length > 0) frameOptions.name = groupName;
+    if (opts.photo !== undefined) frameOptions.photo = opts.photo;
+    if (opts.defacs !== undefined) {
+      const defacs: ImDefacsBody = {};
+      if (opts.defacs.auth.trim().length > 0) defacs.auth = opts.defacs.auth.trim();
+      if (opts.defacs.anon.trim().length > 0) defacs.anon = opts.defacs.anon.trim();
+      frameOptions.defacs = defacs;
+    }
+    if (opts.tags !== undefined && opts.tags.length > 0) frameOptions.tags = opts.tags;
+    const id = this.session.createTopic(requested, frameOptions);
+    if (id.length === 0) return Promise.reject('建群请求未发出：连接未就绪');
+    return new Promise<TinodeGroupCreated>((resolve: (created: TinodeGroupCreated) => void,
+      reject: (reason: string) => void) => {
+      this.pendingReplies.set(id, {
+        resolve: (reply: TinodeReply) => {
+          if (reply.meta !== null) {
+            reject('服务端应答格式不符（期望 ctrl，收到 meta）');
+            return;
+          }
+          if (!reply.ok) {
+            // 3xx 在这里不能当成功：上游对 `sub` 的 3xx 是"已订阅"，**不会换名**
+            // （`Topic.java:911-925`），把占位名 `new…` 当结果返回给调用方是不能用的。
+            reject(ctrlFailureText(reply.code, reply.text));
+            return;
+          }
+          const ctrl = reply.ctrl;
+          const real = ctrl === null || ctrl.topic === undefined ? '' : ctrl.topic.trim();
+          const topic = real.length > 0 ? real : requested;
+          const params = ctrl === null ? undefined : ctrl.params;
+          const acs = parseAcs(params === undefined ? undefined : params.acs);
+          resolve({
+            requestedTopic: requested, topic: topic, name: groupName,
+            renamed: topic !== requested, mode: acs.mode
+          });
+        },
+        reject: reject
+      });
+    });
+  }
+
+  /**
+   * P7：**邀请成员**（`set{topic, sub:{user,mode}}`）。`mode` 是整串权限，**必须显式给**
+   * （本端不猜"默认给成员什么权限"—— 那是产品与安全决策）。服务端拒绝时 reject 可读文案。
+   */
+  inviteMember(topic: string, uid: string, mode: string): Promise<void> {
+    return this.runGroupCtrl(this.session.inviteMember(topic, uid, mode));
+  }
+
+  /** P7：**改成员权限**（整串 mode）。自己和自己比没变化时用 `updateAccessMode` 先算好再传。 */
+  setMemberMode(topic: string, uid: string, mode: string): Promise<void> {
+    return this.runGroupCtrl(this.session.inviteMember(topic, uid, mode));
+  }
+
+  /** P7：**把成员移出群**（`del{what:"sub",user}`）。封禁请用 `setMemberMode(topic, uid, 'N')`。 */
+  removeMember(topic: string, uid: string): Promise<void> {
+    return this.runGroupCtrl(this.session.removeMember(topic, uid));
+  }
+
+  /** P7：**改群默认权限**（`set{desc:{defacs}}`）。空串表示这一侧不改。 */
+  updateGroupDefacs(topic: string, auth: string, anon: string): Promise<void> {
+    return this.runGroupCtrl(this.session.setTopicDefacs(topic, auth, anon));
+  }
+
+  /**
+   * P7：**拉群成员列表**（`get{topic, what:"sub"}` → `meta.sub[]`）。
+   * `limit <= 0` 时不带 limit（用服务端默认）。返回的是解析后的成员，不是原始 `meta`。
+   */
+  members(topic: string, limit: number = 0): Promise<TinodeMember[]> {
+    const key = topic.trim();
+    if (key.length === 0) return Promise.reject('话题不能为空');
+    const id = this.session.loadMembers(key, limit);
+    return new Promise<TinodeMember[]>((resolve: (rows: TinodeMember[]) => void,
+      reject: (reason: string) => void) => {
+      this.runGroupMeta(id).then((meta: ImMeta): void => {
+        resolve(membersFromMeta(meta, key));
+      }).catch((reason: string) => { reject(reason); });
+    });
+  }
+
+  /**
+   * P7：**拉群资料**（`get{what:"desc"}` → `meta.desc`）。**只对群/频道话题有效**：
+   * 单聊/未知话题返回 null（单聊名片请用 `loadProfile` + `profileOf`）。
+   */
+  groupInfo(topic: string): Promise<TinodeGroupInfo | null> {
+    const key = topic.trim();
+    if (key.length === 0) return Promise.reject('话题不能为空');
+    const id = this.session.loadProfile(key);
+    return new Promise<TinodeGroupInfo | null>((resolve: (info: TinodeGroupInfo | null) => void,
+      reject: (reason: string) => void) => {
+      this.runGroupMeta(id).then((meta: ImMeta): void => {
+        resolve(groupInfoFromMeta(meta));
+      }).catch((reason: string) => { reject(reason); });
+    });
   }
 
   /** P5-min：当前已知的会话列表（按最后活动倒序；未收到 `meta` 前为空）。 */

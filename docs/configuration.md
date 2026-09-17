@@ -48,8 +48,11 @@
 2. 若服务端要求 apikey：在服务端配置里拿到 key，通过上面的头/查询参数传；
 3. 首次连接流程是 `hi` → `login` → `sub`；`sub` 必须**先于** `pub`（Tinode 会回 409），
    SDK 的 `subscribe` 内部已处理；
-4. 历史消息：`get{what:"history"}` 需要服务端授权，未开放时会回 **403**（我们自己的部署就是这种，
-   宿主因此只用订阅内联的 `get{what:"desc sub", data:{limit:N}}` 拿最近若干条）。
+4. 历史消息：`get{what:"history"}` 需要服务端授权，未开放时会回 **403**。
+   ⚠️ **2026-09-17 实测订正**：我们自己的部署（dev，协议 0.25）**现在能正常返回历史** ——
+   `get{topic:"grp…", what:"data", data:{before:0, limit:30}}` 依次回了 `data{seq:2}`、`data{seq:1}` 与 `ctrl{code:208}`。
+   同一次实测里**订阅内联窗口**（`sub{get:{what:"desc sub", data:{limit:24}}}`）**没有**回历史，只回了 `ctrl{code:200}` 与 `meta`。
+   所以「靠内联窗口拿最近 N 条」在这类服务端上并不成立；要历史就**显式发** `get{what:"data"}`。
 
 ## 6. 自检清单（连不上时按这个顺序看）
 

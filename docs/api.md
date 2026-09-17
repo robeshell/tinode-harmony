@@ -60,11 +60,74 @@
 | 入口 | 作用 |
 | --- | --- |
 | `normalizeAccessMode` / `acsAllows` / `acsCanRead` / `acsCanWrite` / `acsIsOwner` / `acsSummary` | 权限字母（`J R W P A S D O`，`N`=显式无权限）解析与判定 |
+| `updateAccessMode(mode, change)` | **P7**：权限增量修改 —— 整串替换（`'JSA'` → `'JAS'`）或 `+/-` 增量（`'+P-S'` → `'RWP'`）；非法返回 `null` |
 | `parseAcs(raw)` / `parseDefacs(raw)` | `desc.acs = {given,want,mode}`、`desc.defacs = {auth,anon}` |
 | `buildGetMetaDesc(id, topic)` / `buildGetMetaSub(id, topic, limit)` | 拉名片 / 拉订阅列表（结果在 `meta`） |
 | `buildSetPublicDesc(id, topic, fn, photo?)` | 改公开名片（`set{desc:{public}}`） |
 | `buildAccUpdate(id, uid, scheme, secret, fn?, cred?)` / `buildAccAddCredential(id, uid, meth, val)` | 改密 / 改名片 / 加凭据 |
 | `Tinode.loadProfile/loadSubscriptions/updatePublicName/changePassword/addCredential` | 门面包装（返回报文 id，结果走 `onMeta`/`onCtrl`/`onFailure`） |
+
+## 群组（`TinodeGroup.ts` + wire + 门面，P7 批次一/二）
+
+> 状态：**源码已实现 + 主机测试通过（56 例）**；**真实服务端已验证**（`examples/node/group-check.mjs`
+> 在 dev 服务端 **17/17**：建群改名、成员、权限、移出、**群内双向收发**）；
+> 示例 App 的「建群 / 群聊 / 成员 / 邀请」已在**真机双向跑通**：自己发的与对方发的消息都显示
+> （对方那条是实时送达）；根因修复见 CHANGELOG「批次五」（打开会话早于连接就绪 → 请求被静默丢弃）。
+> 报文形状依据上游 `Sub`/`Set`/`Del` 报文与 `Topic.java:96,880-935,952-958,1298-1391`、`Tinode.java:1752`。
+
+**门面 / 会话（批次二）——日常用这一层**
+
+| 入口 | 作用 |
+| --- | --- |
+| `Tinode.createGroup(name, options?)` | **建群/建频道** → `Promise<TinodeGroupCreated>`；`options` = `{photo?, defacs?, tags?, channel?}` |
+| `TinodeGroupCreated` | `{requestedTopic, topic, name, renamed, mode}`：**`topic` 是服务端给的真名**，`requestedTopic` 只是本地占位名 |
+| `Tinode.inviteMember(topic, uid, mode)` / `setMemberMode(topic, uid, mode)` | 邀请成员 / 改成员权限（`mode` 是**整串**，用 `updateAccessMode` 先算） |
+| `Tinode.removeMember(topic, uid)` | 移出群（封禁用 `setMemberMode(topic, uid, 'N')`） |
+| `Tinode.updateGroupDefacs(topic, auth, anon)` | 改群默认权限（空串 = 这一侧不改） |
+| `Tinode.members(topic, limit?)` | 成员列表 → `Promise<TinodeMember[]>`（`limit<=0` 用服务端默认） |
+| `Tinode.groupInfo(topic)` | 群资料 → `Promise<TinodeGroupInfo \| null>`（单聊/未知话题为 `null`） |
+| `ImSession.createTopic(topic, options)` | 会话层建群：发 `sub{topic:"new…", set}`，**2xx 时用 `ctrl.topic` 自动改名**；返回报文 id |
+| `ImSession.inviteMember` / `removeMember` / `setTopicDefacs` / `loadMembers` | 会话层同名能力（返回报文 id；参数非法返回 `''`） |
+
+```ts
+const g = await tinode.createGroup('项目群', { defacs: { auth: 'JRWPA', anon: 'N' } });
+tinode.subscribe(g.topic);                                  // ← 必须用返回的 topic（真名 grp…）
+await tinode.inviteMember(g.topic, 'usrPeer01', 'JRWPA');
+const rows = await tinode.members(g.topic);                 // TinodeMember[]
+const info = await tinode.groupInfo(g.topic);               // 名字/头像/defacs/我的权限
+```
+
+> **应答归因**：门面按报文 id 等在途请求，`ctrl` 与 `meta` 都能兑现 —— `get{what:"sub"|"desc"}` 成功回 `meta`，
+> **失败回的是 `ctrl`**；断线时统一 reject（「连接已断开，请重试」），不让 Promise 悬着。
+>
+> **3xx 口径**：Tinode 对**幂等写**回 3xx（相同的 `set` 再发一次 → **304 Not Modified**），
+> 对**已订阅**的话题回 **303 See Other**（真实服务端实测）。所以：
+> **写操作**与**订阅结果**都用 `ctrlAccepted`（`200 ≤ code < 400`，依据上游 `Tinode.java:713-714`
+> 与 `Topic.java:911`）判成功 —— 只认 2xx 会把"已订阅"标成"未订阅"，让宿主等 `subscribed` 的发送队列
+> 永远不补发；但 `createGroup` 只认 2xx —— 3xx 时上游**不换名**，返回的占位名不可用。
+>
+> **群名不在 `meta.sub[].pub` 里**：那是"我的订阅的 public"，对群话题通常是空的；群名在群自己的
+> `desc.public.fn`，要 `get{topic:"grp…", what:"desc"}`（门面 `groupInfo()`，示例的 `loadGroupInfo()`）。
+
+**纯逻辑与报文（批次一）**
+
+| 入口 | 作用 |
+| --- | --- |
+| `topicKindOf(name)` | 话题种类：`grp`/`chn`/`p2p`/`me`/`fnd`/`sys`/`unknown`（`new…` 算 `grp`，`nch…` 算 `chn`） |
+| `isGroupTopic` / `isNewTopic` / `isP2PTopic` / `isChannelTopic` | 分类判定；`isNewTopic`（`new…`/`nch…`）用于**拦住"还没同步就发 set"** |
+| `newGroupTopicName(nowMs, counter, randomFraction)` / `newChannelTopicName(…)` | 造待创建的话题名（`new…`/`nch…`）；**建群成功后必须用应答 `ctrl.topic` 换名** |
+| `buildSubCreate(id, topic, {name, photo, defacs, tags})` | `sub{topic, set{desc{public,defacs}, tags}}`：**建群/建频道** |
+| `buildGetMetaSub(id, topic, limit)` | 复用：`get{topic:"grp…", what:"sub"}` 拉**成员列表**（结果在 `meta.sub[]`） |
+| `membersFromMeta(meta, fallbackTopic?)` / `memberFromSub(sub, fallbackTopic?)` | `meta.sub[]` → `TinodeMember`（uid/权限/名片/在线）；没有 `user` 的行会被丢弃 |
+| `mergeMembers(known, incoming)` / `memberOf(members, uid)` / `sortMembers(members)` | 增量合并（`"N"` 也是有效值）、查找、排序（所有者→在线→有名字→uid） |
+| `buildSetSubMode(id, topic, user, mode)` | **邀请成员**或改成员权限（`set{sub:{user,mode}}`，整串 mode；`user` 空 = 改我自己） |
+| `buildSetDefacs(id, topic, auth, anon)` | 改群**默认权限**（`set{desc:{defacs}}`） |
+| `buildDelSubscription(id, topic, user)` | **移出群**（`del{what:"sub",user}`）；封禁不是删除，而是 `buildSetSubMode(…, 'N')` |
+| `groupInfoFromMeta(meta)` | `meta.desc` → `{topic, kind, name, photo, defacs, acs}`；只认群类话题 |
+| `groupPermissionsOf(mode)` / `canInviteMembers` / `canApproveMembers` / `canEditGroup` / `canDeleteGroupMessages` | 由我在群里的 `mode` 算出可做的事（**UI 提示**；服务端才是权威） |
+
+**没做**：示例界面里的群聊入口；改群资料（改名/换头像，只有建群时能带 `desc.public`）；成员审批与加入申请；
+**真机与真实服务端均未验证**。
 
 ## 富文本（`Drafty.ts`，P6）
 

@@ -78,6 +78,36 @@ export class TinodeTopics {
   }
 
   /**
+   * 话题改名（P7 建群用）：客户端先造占位名 `new…`，服务端在 `sub` 应答的 **`ctrl.topic`** 里给出真正的
+   * `grp…`（上游 `Topic.java:925-928`）。登记状态必须跟着搬过去，否则重连时会对一个不存在的 `new…`
+   * 重新订阅。位点与订阅意图都保留；目标名已登记时合并（位点取最大、`subscribed` 取或）。
+   *
+   * 返回是否真的搬动了（`from` 未登记、`from === to`、任一侧为空都返回 false）。
+   */
+  rename(from: string, to: string): boolean {
+    const source = from.trim();
+    const target = to.trim();
+    if (source.length === 0 || target.length === 0 || source === target) return false;
+    const state = this.byTopic.get(source);
+    if (state === undefined) return false;
+    this.byTopic.delete(source);
+    const existing = this.byTopic.get(target);
+    if (existing === undefined) {
+      state.topic = target;
+      this.byTopic.set(target, state);
+      return true;
+    }
+    // 目标名已经登记过：**保留它自己的订阅意图**（可能比占位名更"全"，例如 withSub=true / 更大的
+    // limit），只把位点与订阅结果按"取最大/取或"合过来 —— 不让改名把已有信息降级。
+    existing.subscribed = existing.subscribed || state.subscribed;
+    existing.lastSeq = Math.max(existing.lastSeq, state.lastSeq);
+    existing.read = Math.max(existing.read, state.read);
+    existing.recv = Math.max(existing.recv, state.recv);
+    existing.touchedAtMs = Math.max(existing.touchedAtMs, state.touchedAtMs);
+    return true;
+  }
+
+  /**
    * 连接断掉/重连时调用：所有主题的"本轮已订阅"标记清零（wire 上的订阅已经不存在了），
    * 但**保留**订阅意图与位点 —— 重连后据此自动重订阅 + 补历史。
    */
