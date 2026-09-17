@@ -1,38 +1,78 @@
 /**
- * tinode-harmony 示例 App —— 完整聊天 demo（4 个视图，单页切换）：
- *  1. 连接与账号：地址/apikey → 注册或密码登录（也可 anonymous）
- *  2. 会话列表：名字/头像/未读/在线/最后在线/权限摘要 + 刷新 + 主题登记状态
- *  3. 聊天：历史分页、收发、富文本（加粗/斜体）、附件（校验/分块/进度）、已读、正在输入、撤回
- *  4. 能力清单：SDK 每个能力 → 对应 API 与源码位置
- * 配置来源：页面输入框 或 gitignored 的 `resources/rawfile/im.local.json`。
+ * tinode-harmony 示例 App —— 一个像样的 IM 界面（4 个视图），同时展示 SDK 能力：
+ *   0 登录/连接 · 1 会话列表 · 2 聊天 · 3 能力清单
+ * 视觉令牌集中在 `demo/DemoTheme.ets`（数值照宿主 App，与 Android 基线一致）。
  */
 import { common } from '@kit.AbilityKit';
 import { DemoClient, DemoConversation, DemoListener, DemoMessage } from '../demo/DemoClient';
 import { DraftySegment } from '../tinode/Index.ts';
+import { DemoTheme, avatarColorOf, initialOf } from '../demo/DemoTheme';
+import { deliveryMarkOf, durationTextOf, sizeTextOf, timeLabelOf } from '../demo/DemoFormat';
 import {
   DemoVoiceRecorder, PickedFile, RecordedVoice, ensureMicPermission, pickDocument, pickImage, readUriBytes
 } from '../demo/DemoPickers';
 import { loadLocalConfig, LocalTinodeConfig } from '../tinode/LocalConfig';
 
-const CAPABILITIES: string[][] = [
-  ['连接 / hi 握手 / 服务端版本', 'ImSession.start + onServerVersion', 'tinode/TinodeSession.ts'],
-  ['超时 / 指数退避重连 / 代次守卫', 'ImSession.tick（宿主驱动时间）', 'tinode/TinodeSession.ts'],
-  ['登录 scheme', "token / basic(base64) / anonymous / none", 'tinode/TinodeWire.ts'],
-  ['注册账号（acc user:"new"）', 'Tinode.registerAccount', 'tinode/Tinode.ts'],
-  ['改密 / 加凭据 / 改名片', 'changePassword / addCredential / updatePublicName', 'tinode/Tinode.ts'],
-  ['订阅 / 历史分页 / 已读 / 正在输入 / 撤回', 'subscribe / history / setRead / setTyping / deleteMessages', 'tinode/Tinode.ts'],
-  ['主题登记 + 断线自动重订阅', 'TinodeTopics / onTopicState / knownTopics', 'tinode/TinodeTopics.ts'],
-  ['会话列表（meta.sub）', 'profilesFromMeta / mergeProfiles / onTopics', 'tinode/TinodeMeta.ts'],
-  ['在线与最后在线', 'applyPresence / lastSeenMs', 'tinode/TinodeMeta.ts'],
-  ['消息去重合并 / 未读 / 会话摘要 / 容量淘汰', 'mergeMessages / unreadOf / conversationSummaryOf / planMessageEviction', 'tinode/TinodeStore.ts'],
-  ['存储端口 + LRU 读缓存', 'CachedTinodeStorage(inner, capacity)', 'tinode/TinodeStorageCache.ts'],
-  ['富文本写侧（加粗/斜体/链接/@/图片）', 'draftyWithStyle / draftyLink / draftyMention / draftyImage', 'tinode/Drafty.ts'],
-  ['富文本编辑（偏移自动位移）', 'draftyInsert / draftyDelete / draftyTrim', 'tinode/Drafty.ts'],
-  ['富文本渲染模型', 'draftySegments', 'tinode/Drafty.ts'],
-  ['附件校验 / 分块 / 进度 / 缓存 LRU', 'validateAttachment / planChunks / planEviction', 'tinode/TinodeAttachment.ts'],
-  ['附件上传（平台 HTTP）', 'HarmonyAttachmentHttp（未真机验证）', 'tinode/TinodeAttachmentHttp.ets'],
-  ['权限模型', 'acsAllows / parseAcs / acsSummary', 'tinode/TinodeAcs.ts'],
-  ['入站防御 / 出站帧体量守卫 / 日志脱敏', 'parseServerMessage / maxFrameBytes / redactTopic', 'tinode/TinodeWire.ts · TinodeLog.ts']
+interface CapabilityRow {
+  name: string;
+  api: string;
+  where: string;
+  status: string;
+}
+
+interface CapabilityGroup {
+  title: string;
+  rows: CapabilityRow[];
+}
+
+const CAPABILITY_GROUPS: CapabilityGroup[] = [
+  {
+    title: '连接与生命周期',
+    rows: [
+      { name: '连接 / hi 握手 / 服务端版本', api: 'ImSession.start · onServerVersion', where: 'TinodeSession.ts', status: '✅' },
+      { name: '超时 / 指数退避重连 / 代次守卫', api: 'ImSession.tick（宿主喂时间）', where: 'TinodeSession.ts', status: '✅' },
+      { name: '入站帧守卫 / 出站帧上限 / 日志脱敏', api: 'parseServerMessage · maxFrameBytes · redactTopic', where: 'TinodeWire.ts · TinodeLog.ts', status: '✅' }
+    ]
+  },
+  {
+    title: '账号与资料',
+    rows: [
+      { name: '注册 / 改密 / 加凭据 / 改名片', api: 'registerAccount · changePassword · addCredential · updatePublicName', where: 'Tinode.ts', status: '✅' },
+      { name: '登录 scheme', api: 'token / basic(base64) / anonymous / none', where: 'TinodeWire.ts', status: '✅' },
+      { name: '会话列表与显示名', api: 'profilesFromMeta · mergeProfiles · onTopics', where: 'TinodeMeta.ts', status: '✅' },
+      { name: '在线 / 最后在线', api: 'applyPresence · lastSeenMs', where: 'TinodeMeta.ts', status: '✅' },
+      { name: '权限模型', api: 'acsAllows · parseAcs · acsSummary', where: 'TinodeAcs.ts', status: '✅' }
+    ]
+  },
+  {
+    title: '消息',
+    rows: [
+      { name: '订阅 / 发布 / 历史分页 / 已读 / 输入中 / 撤回', api: 'subscribe · publish · history · setRead · setTyping · deleteMessages', where: 'Tinode.ts', status: '✅' },
+      { name: '主题登记 + 断线自动重订阅', api: 'TinodeTopics · onTopicState', where: 'TinodeTopics.ts', status: '✅' },
+      { name: '富文本写侧（加粗/斜体/链接/@/图片）', api: 'draftyWithStyle · draftyLink · draftyMention · draftyImage', where: 'Drafty.ts', status: '✅' },
+      { name: '富文本编辑（偏移自动位移）', api: 'draftyInsert · draftyDelete · draftyTrim', where: 'Drafty.ts', status: '✅' },
+      { name: '富文本渲染', api: 'draftySegments', where: 'Drafty.ts', status: '✅' }
+    ]
+  },
+  {
+    title: '存储与附件',
+    rows: [
+      { name: '存储端口 + LRU 读缓存', api: 'TinodeStorage · CachedTinodeStorage', where: 'TinodeStorageCache.ts', status: '✅' },
+      { name: '去重合并 / 未读 / 摘要 / 淘汰', api: 'mergeMessages · unreadOf · planMessageEviction', where: 'TinodeStore.ts', status: '✅' },
+      { name: '附件校验 / 分块 / 进度 / 缓存键', api: 'validateAttachment · planChunks · planEviction', where: 'TinodeAttachment.ts', status: '✅' },
+      { name: '附件平台上传', api: 'HarmonyAttachmentHttp', where: 'TinodeAttachmentHttp.ets', status: '⚠️' },
+      { name: '系统 picker（图片 / 文件）', api: 'PhotoViewPicker · DocumentViewPicker', where: 'demo/DemoPickers.ets', status: '✅' },
+      { name: '麦克风录音（按住说话）', api: 'AudioCapturer · ohos.permission.MICROPHONE', where: 'demo/DemoPickers.ets', status: '✅' }
+    ]
+  },
+  {
+    title: '未实现（TODO）',
+    rows: [
+      { name: '群组 grp', api: '—', where: '—', status: '❌' },
+      { name: '推送 set{deviceToken}', api: '—', where: '—', status: '❌' },
+      { name: '模糊搜人（关键词）', api: '不在 Tinode WS 协议内', where: '—', status: '❌' }
+    ]
+  }
 ];
 
 @Entry
@@ -43,27 +83,29 @@ struct Index {
   @Local apiKey: string = '';
   @Local user: string = '';
   @Local password: string = '';
-  @Local anonymous: boolean = false;
-  @Local state: string = '未连接';
+  @Local state: string = 'idle';
   @Local detail: string = '';
+  @Local busy: boolean = false;
   @Local logLines: string[] = [];
   @Local conversations: DemoConversation[] = [];
   @Local messages: DemoMessage[] = [];
   @Local currentTopic: string = '';
+  @Local peerName: string = '';
+  @Local peerOnline: boolean = false;
+  @Local peerSeen: string = '';
   @Local draft: string = '';
   @Local bold: boolean = false;
   @Local italic: boolean = false;
+  @Local showAttach: boolean = false;
+  @Local voiceMode: boolean = false;
+  @Local recording: boolean = false;
+  @Local voiceLevel: number = 0;
   @Local uploadNote: string = '';
   @Local uploadPercent: number = 0;
-  @Local subscribedCount: number = 0;
-  @Local topicInput: string = '';
-  @Local myUid: string = '';
   @Local cacheLine: string = '';
-  @Local pickedNote: string = '';
-  @Local voiceLevel: number = 0;
-  @Local recording: boolean = false;
-  private recorder: DemoVoiceRecorder = new DemoVoiceRecorder();
+  @Local myUid: string = '';
   private client: DemoClient | null = null;
+  private recorder: DemoVoiceRecorder = new DemoVoiceRecorder();
 
   aboutToAppear(): void {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
@@ -72,10 +114,23 @@ struct Index {
       this.apiKey = cfg.apiKey;
       this.user = cfg.user.length > 0 ? cfg.user : cfg.token;
       this.password = cfg.password;
-      this.append('已读取本地配置（若无请手填）');
+      this.append('已读取本地配置');
     }).catch(() => {});
     const listener: DemoListener = {
-      onState: (state: string, detail: string) => { this.state = state; if (detail.length > 0) this.detail = detail; },
+      onState: (state: string, detail: string) => {
+        this.state = state;
+        if (detail.length > 0) this.detail = detail;
+        if (state === 'ready' || state === 'failed' || state === 'closed') this.busy = false;
+        const client = this.client;
+        if (state === 'ready' && client !== null) {
+          const uid = client.myUid();
+          if (uid.length > 0) {
+            this.myUid = uid;
+            if (this.view === 0) this.view = 1;          // 已认证 → 直接进会话列表
+            client.refreshConversations();
+          }
+        }
+      },
       onLog: (line: string) => this.append(line),
       onConversations: (list: DemoConversation[]) => { this.conversations = list; },
       onMessages: (list: DemoMessage[]) => { this.messages = list; },
@@ -85,274 +140,594 @@ struct Index {
   }
 
   aboutToDisappear(): void {
-    this.recorder.release();                 // 释放麦克风，避免离开页面后还占着
+    this.recorder.release();
     const client = this.client;
     if (client !== null) client.disconnect();
   }
 
-  /** 选图片（系统图库 picker）→ 交给 SDK 校验/分块/（可选）上传 → 发消息。 */
+  private append(line: string): void {
+    const next = this.logLines.slice();
+    next.push(line);
+    this.logLines = next.length > 80 ? next.slice(next.length - 80) : next;
+  }
+
+  private clientOrNull(): DemoClient | null { return this.client; }
+
+  private statusColor(): string {
+    if (this.state === 'ready') return DemoTheme.success;
+    if (this.state === 'failed') return DemoTheme.danger;
+    if (this.state === 'connecting' || this.state === 'handshake' || this.state === 'login') return DemoTheme.warning;
+    return DemoTheme.textHint;
+  }
+
+  private statusText(): string {
+    if (this.state === 'ready') return this.detail.length > 0 ? `在线 · ${this.detail}` : '在线';
+    if (this.state === 'failed') return this.detail.length > 0 ? this.detail : '连接失败';
+    if (this.state === 'connecting') return '连接中…';
+    if (this.state === 'handshake') return '握手中…';
+    if (this.state === 'login') return '登录中…';
+    if (this.state === 'closed') return '已断开';
+    return '未连接';
+  }
+
+  private openConversation(topic: string, name: string, online: boolean, seenMs: number): void {
+    const client = this.clientOrNull();
+    if (client === null) return;
+    client.openTopic(topic);
+    this.currentTopic = topic;
+    this.peerName = name.length > 0 ? name : topic;
+    this.peerOnline = online;
+    this.peerSeen = seenMs > 0 ? `最后在线 ${timeLabelOf(seenMs, Date.now())}` : '';
+    this.cacheLine = client.cacheLine();
+    this.view = 2;
+  }
+
   private pickAndSendImage(): void {
     pickImage().then((file: PickedFile) => {
-      this.pickedNote = `已选图：${file.name}（${file.size}B）`;
-      const bytes = readUriBytes(file.uri, 8 * 1024 * 1024);
+      this.uploadNote = `已选图 ${file.name}（${sizeTextOf(file.size)}）`;
       const client = this.clientOrNull();
-      if (client !== null) return client.sendPickedFile(file, bytes);
+      if (client !== null) return client.sendPickedFile(file, readUriBytes(file.uri, 8 * 1024 * 1024));
       return undefined;
-    }).catch(() => { this.pickedNote = '已取消选择图片'; });
+    }).catch(() => { this.uploadNote = '已取消选择图片'; });
   }
 
-  /** 选文件（系统文件 picker）。 */
   private pickAndSendDocument(): void {
     pickDocument().then((file: PickedFile) => {
-      this.pickedNote = `已选文件：${file.name}（${file.size}B）`;
-      const bytes = readUriBytes(file.uri, 8 * 1024 * 1024);
+      this.uploadNote = `已选文件 ${file.name}（${sizeTextOf(file.size)}）`;
       const client = this.clientOrNull();
-      if (client !== null) return client.sendPickedFile(file, bytes);
+      if (client !== null) return client.sendPickedFile(file, readUriBytes(file.uri, 8 * 1024 * 1024));
       return undefined;
-    }).catch(() => { this.pickedNote = '已取消选择文件'; });
+    }).catch(() => { this.uploadNote = '已取消选择文件'; });
   }
 
-  /** 按下开始录音（先申请麦克风权限）。 */
   private startRecording(): void {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
     ensureMicPermission(context).then((granted: boolean) => {
-      if (!granted) { this.pickedNote = '没有麦克风权限：无法录音'; return; }
+      if (!granted) { this.uploadNote = '没有麦克风权限'; return; }
       this.recorder.start().then((ok: boolean) => {
         this.recording = ok;
-        this.pickedNote = ok ? '正在录音…（松开手指发送）' : '录音启动失败';
-        if (ok) this.startLevelTimer();
+        this.uploadNote = ok ? '正在录音…松开发送' : '录音启动失败';
+        if (ok) {
+          const timer = setInterval(() => {
+            if (!this.recording) { clearInterval(timer); return; }
+            this.voiceLevel = this.recorder.level();
+          }, 120);
+        }
       });
     });
   }
 
-  /** 轮询电平（录音期间的简单可视化）。 */
-  private startLevelTimer(): void {
-    const timer = setInterval(() => {
-      if (!this.recording) { clearInterval(timer); return; }
-      this.voiceLevel = this.recorder.level();
-    }, 120);
-  }
-
-  /** 松开：发送语音；上滑/取消：丢弃。 */
   private stopRecording(send: boolean): void {
     if (!this.recording) return;
     this.recording = false;
     const pending = send ? this.recorder.stop() : this.recorder.cancel().then(() => null);
     pending.then((voice: RecordedVoice | null) => {
       this.voiceLevel = 0;
-      if (voice === null) { this.pickedNote = send ? '录音太短，已取消' : '已取消录音'; return; }
-      this.pickedNote = `语音 ${voice.durationMs}ms / ${voice.bytes.length}B`;
+      if (voice === null) { this.uploadNote = send ? '录音太短，已取消' : '已取消录音'; return; }
+      this.uploadNote = `语音 ${durationTextOf(voice.durationMs)}`;
       const client = this.clientOrNull();
       if (client !== null) return client.sendVoice(voice);
       return undefined;
     });
   }
 
-  private append(line: string): void {
-    const next = this.logLines.slice();
-    next.push(line);
-    this.logLines = next.length > 120 ? next.slice(next.length - 120) : next;
-  }
+  // ── 通用小部件 ─────────────────────────────────────────────────────────────
 
-  private clientOrNull(): DemoClient | null {
-    return this.client;
+  @Builder
+  avatar(name: string, topic: string, size: number) {
+    Stack() {
+      Text(initialOf(name, topic))
+        .fontSize(size / 2.4)
+        .fontColor(Color.White)
+        .fontWeight(FontWeight.Medium)
+    }
+    .width(size).height(size)
+    .borderRadius(size / 2)
+    .backgroundColor(avatarColorOf(topic))
   }
 
   @Builder
-  connectionView() {
-    Column({ space: 8 }) {
-      Text('1 · 连接与账号').fontSize(18).fontWeight(FontWeight.Bold)
-      Text(`状态：${this.state}${this.detail.length > 0 ? ` — ${this.detail}` : ''}`).fontSize(13)
-      TextInput({ text: this.wsUrl, placeholder: 'wss://host:port/v0/channels' }).onChange((v: string) => { this.wsUrl = v; })
-      TextInput({ text: this.apiKey, placeholder: 'apikey（可空）' }).onChange((v: string) => { this.apiKey = v; })
-      TextInput({ text: this.user, placeholder: '用户名' }).onChange((v: string) => { this.user = v; })
-      TextInput({ text: this.password, placeholder: '密码' }).onChange((v: string) => { this.password = v; })
-      Row({ space: 10 }) {
-        Button('连接').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.connect(this.wsUrl, this.apiKey); })
-        Button('注册').onClick(() => {
-          const c = this.clientOrNull();
-          if (c === null) return;
-          c.register(this.user, this.password).then(() => {
-            this.subscribedCount = c.topics().length;
-            this.myUid = c.myUid();
-          }).catch((error: Object) => this.append(`注册失败：${String(error)}`));
-        })
-        Button('密码登录').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.login(this.user, this.password); })
-        Button('断开').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.disconnect(); this.state = '已断开'; })
-      }
-      Button('进入会话列表 →').onClick(() => { this.view = 1; })
+  statusChip() {
+    Row({ space: 6 }) {
+      Circle({ width: 8, height: 8 }).fill(this.statusColor())
+      Text(this.statusText()).fontSize(12).fontColor(DemoTheme.textSecondary)
+    }
+    .padding({ left: 10, right: 10, top: 4, bottom: 4 })
+    .borderRadius(12)
+    .backgroundColor(DemoTheme.surface)
+  }
+
+  @Builder
+  labeledField(label: string, value: string, placeholder: string, onChange: (text: string) => void) {
+    Column({ space: 6 }) {
+      Text(label).fontSize(12).fontColor(DemoTheme.textSecondary)
+      TextInput({ text: $$value, placeholder: placeholder })
+        .height(44)
+        .backgroundColor(DemoTheme.fieldFill)
+        .borderRadius(8)
+        .onChange((text: string) => onChange(text))
     }.width('100%').alignItems(HorizontalAlign.Start)
+  }
+
+  // ── 0 · 登录 / 连接 ────────────────────────────────────────────────────────
+
+  @Builder
+  loginView() {
+    Scroll() {
+      Column({ space: 18 }) {
+        Column({ space: 10 }) {
+          Stack() {
+            Text('T').fontSize(30).fontColor(Color.White).fontWeight(FontWeight.Bold)
+          }
+          .width(72).height(72).borderRadius(20).backgroundColor(DemoTheme.brand)
+          Text('tinode-harmony').fontSize(22).fontWeight(FontWeight.Bold).fontColor(DemoTheme.textPrimary)
+          Text('Tinode 协议的 HarmonyOS 客户端 SDK 示例').fontSize(13).fontColor(DemoTheme.textHint)
+        }.margin({ top: 32 })
+
+        this.statusChip()
+
+        Column({ space: 14 }) {
+          Column({ space: 6 }) {
+            Text('服务地址').fontSize(12).fontColor(DemoTheme.textSecondary)
+            TextInput({ text: $$this.wsUrl, placeholder: 'wss://host:port/v0/channels' })
+              .height(44).backgroundColor(DemoTheme.fieldFill).borderRadius(8)
+          }.width('100%').alignItems(HorizontalAlign.Start)
+          Column({ space: 6 }) {
+            Text('apikey（可空）').fontSize(12).fontColor(DemoTheme.textSecondary)
+            TextInput({ text: $$this.apiKey, placeholder: 'X-Tinode-APIKey' })
+              .height(44).backgroundColor(DemoTheme.fieldFill).borderRadius(8)
+          }.width('100%').alignItems(HorizontalAlign.Start)
+          Column({ space: 6 }) {
+            Text('用户名').fontSize(12).fontColor(DemoTheme.textSecondary)
+            TextInput({ text: $$this.user, placeholder: '注册或登录用的账号' })
+              .height(44).backgroundColor(DemoTheme.fieldFill).borderRadius(8)
+          }.width('100%').alignItems(HorizontalAlign.Start)
+          Column({ space: 6 }) {
+            Text('密码').fontSize(12).fontColor(DemoTheme.textSecondary)
+            TextInput({ text: $$this.password, placeholder: '至少 6 位' })
+              .height(44).type(InputType.Password).backgroundColor(DemoTheme.fieldFill).borderRadius(8)
+          }.width('100%').alignItems(HorizontalAlign.Start)
+        }
+        .padding(16)
+        .backgroundColor(Color.White)
+        .borderRadius(DemoTheme.cardRadius)
+        .width('100%')
+
+        Column({ space: 10 }) {
+          Button(this.busy ? '处理中…' : '连接')
+            .width('100%').height(46).borderRadius(10)
+            .backgroundColor(DemoTheme.brand)
+            .enabled(!this.busy)
+            .onClick(() => {
+              const client = this.clientOrNull();
+              if (client === null) return;
+              this.busy = true;
+              client.connect(this.wsUrl, this.apiKey);
+            })
+          Row({ space: 10 }) {
+            Button('注册并登录')
+              .layoutWeight(1).height(44).borderRadius(10)
+              .backgroundColor(Color.White).fontColor(DemoTheme.brandText)
+              .border({ width: 1, color: DemoTheme.brand })
+              .onClick(() => {
+                const client = this.clientOrNull();
+                if (client === null) return;
+                this.busy = true;
+                client.register(this.user, this.password).then(() => {
+                  this.myUid = client.myUid();
+                  this.busy = false;
+                  client.refreshConversations();
+                  this.view = 1;
+                }).catch((error: Object) => {
+                  this.busy = false;
+                  this.append(`注册失败：${String(error)}`);
+                });
+              })
+            Button('密码登录')
+              .layoutWeight(1).height(44).borderRadius(10)
+              .backgroundColor(Color.White).fontColor(DemoTheme.textPrimary)
+              .border({ width: 1, color: DemoTheme.border })
+              .onClick(() => {
+                const client = this.clientOrNull();
+                if (client === null) return;
+                client.login(this.user, this.password);
+              })
+          }.width('100%')
+        }.width('100%')
+
+        if (this.logLines.length > 0) {
+          Column({ space: 2 }) {
+            Text('运行日志').fontSize(12).fontColor(DemoTheme.textSecondary)
+            ForEach(this.logLines.slice(Math.max(0, this.logLines.length - 6)), (line: string, index: number) => {
+              Text(line).fontSize(10).fontColor(DemoTheme.textHint).width('100%')
+            }, (line: string, index: number) => `${index}-${line}`)
+          }
+          .width('100%').padding(12)
+          .backgroundColor(Color.White).borderRadius(DemoTheme.cardRadius)
+        }
+      }
+      .width('100%').padding(DemoTheme.pagePadding)
+    }
+    .width('100%').height('100%').backgroundColor(DemoTheme.pageBackground)
+    .scrollBar(BarState.Off)
+  }
+
+  // ── 1 · 会话列表 ───────────────────────────────────────────────────────────
+
+  @Builder
+  conversationRow(item: DemoConversation) {
+    Row({ space: 12 }) {
+      Stack() {
+        this.avatar(item.name, item.topic, DemoTheme.avatarSize)
+        if (item.online) {
+          Circle({ width: 10, height: 10 })
+            .fill(DemoTheme.success)
+            .border({ width: 2, color: Color.White })
+            .offset({ x: 15, y: 15 })
+        }
+      }.width(DemoTheme.avatarSize).height(DemoTheme.avatarSize)
+      Column({ space: 4 }) {
+        Row() {
+          Text(item.name).fontSize(16).fontWeight(FontWeight.Medium).fontColor(DemoTheme.textPrimary)
+            .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          Text(item.timeText).fontSize(11).fontColor(DemoTheme.textHint)
+        }.width('100%')
+        Row({ space: 8 }) {
+          Text(item.preview.length > 0 ? item.preview : '（还没有消息）')
+            .fontSize(13).fontColor(DemoTheme.textSecondary)
+            .layoutWeight(1).maxLines(1).textOverflow({ overflow: TextOverflow.Ellipsis })
+          if (item.unread > 0) {
+            Text(`${item.unread > 99 ? '99+' : item.unread}`)
+              .fontSize(11).fontColor(Color.White)
+              .padding({ left: 6, right: 6, top: 1, bottom: 1 })
+              .borderRadius(9).backgroundColor(DemoTheme.danger)
+          }
+        }.width('100%')
+      }.layoutWeight(1).alignItems(HorizontalAlign.Start)
+    }
+    .width('100%').padding({ left: 16, right: 16, top: 12, bottom: 12 })
+    .backgroundColor(Color.White)
+    .onClick(() => this.openConversation(item.topic, item.name, item.online, item.lastSeenMs))
   }
 
   @Builder
   conversationView() {
-    Column({ space: 8 }) {
-      Text('2 · 会话列表').fontSize(18).fontWeight(FontWeight.Bold)
+    Column() {
       Row({ space: 10 }) {
-        Button('刷新').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.refreshConversations(); })
-        Button('能力清单').onClick(() => { this.view = 3; })
-        Button('← 连接').onClick(() => { this.view = 0; })
+        Text('消息').fontSize(20).fontWeight(FontWeight.Bold).layoutWeight(1)
+        this.statusChip()
+        Text('刷新').fontSize(13).fontColor(DemoTheme.brand).onClick(() => {
+          const client = this.clientOrNull();
+          if (client !== null) client.refreshConversations();
+        })
+        Text('能力').fontSize(13).fontColor(DemoTheme.brand).onClick(() => { this.view = 3; })
+        Text('退出').fontSize(13).fontColor(DemoTheme.textSecondary).onClick(() => { this.view = 0; })
+      }
+      .width('100%').height(DemoTheme.appBarHeight).padding({ left: 16, right: 16 })
+      .backgroundColor(Color.White)
+
+      Row({ space: 8 }) {
+        TextInput({ text: $$this.draft, placeholder: '新会话：输入 usrXXXXXX' })
+          .layoutWeight(1).height(36).backgroundColor(DemoTheme.fieldFill).borderRadius(18)
+        Button('打开').height(36).borderRadius(18).backgroundColor(DemoTheme.brand).fontSize(13)
+          .onClick(() => {
+            if (this.draft.trim().length === 0) return;
+            this.openConversation(this.draft.trim(), this.draft.trim(), false, 0);
+          })
+        Button('发给自己').height(36).borderRadius(18).fontSize(13)
+          .backgroundColor(Color.White).fontColor(DemoTheme.brandText)
+          .border({ width: 1, color: DemoTheme.brand })
+          .onClick(() => {
+            const client = this.clientOrNull();
+            if (client === null) return;
+            const uid = client.myUid();
+            this.myUid = uid;
+            if (uid.length === 0) { this.append('还没有 uid：先注册或登录'); return; }
+            this.openConversation(uid, '我自己', true, 0);
+          })
+      }
+      .width('100%').padding({ left: 12, right: 12, bottom: 10 }).backgroundColor(Color.White)
+
+      if (this.conversations.length === 0) {
+        Column({ space: 8 }) {
+          Text('💬').fontSize(40)
+          Text('还没有会话').fontSize(15).fontColor(DemoTheme.textSecondary)
+          Text('新注册的账号没有任何会话：用上面的输入框打开 usrXXXXXX，或点「发给自己」').fontSize(12).fontColor(DemoTheme.textHint)
+            .textAlign(TextAlign.Center).padding({ left: 32, right: 32 })
+        }.layoutWeight(1).justifyContent(FlexAlign.Center).width('100%')
+      } else {
+        List() {
+          ForEach(this.conversations, (item: DemoConversation) => {
+            ListItem() { this.conversationRow(item) }
+          }, (item: DemoConversation) => item.topic)
+        }
+        .layoutWeight(1).width('100%').divider({ strokeWidth: 0.5, color: DemoTheme.divider, startMargin: 68 })
+      }
+
+      if (this.cacheLine.length > 0) {
+        Text(this.cacheLine).fontSize(10).fontColor(DemoTheme.textHint)
+          .width('100%').padding({ left: 16, top: 6, bottom: 6 })
+      }
+    }
+    .width('100%').height('100%').backgroundColor(DemoTheme.pageBackground)
+  }
+
+  // ── 2 · 聊天 ───────────────────────────────────────────────────────────────
+
+  @Builder
+  messageContent(item: DemoMessage) {
+    Column({ space: 4 }) {
+      if (item.kind === 'IM' || item.kind === 'VD') {
+        Row({ space: 8 }) {
+          Text('[图片]').fontSize(13).fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
+          Text(item.text.length > 0 ? item.text : item.fileName).fontSize(14)
+            .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
+        }
+      } else if (item.kind === 'EX') {
+        Row({ space: 10 }) {
+          Text('📄').fontSize(22)
+          Column({ space: 2 }) {
+            Text(item.fileName.length > 0 ? item.fileName : item.text).fontSize(14).fontWeight(FontWeight.Medium)
+              .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary).maxLines(2)
+              .textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(sizeTextOf(item.fileSize)).fontSize(11)
+              .fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
+          }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        }.width('100%')
+      } else if (item.kind === 'AU') {
+        Row({ space: 8 }) {
+          Text('🔊').fontSize(16)
+          Text(durationTextOf(item.durationMs)).fontSize(14)
+            .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
+        }
+      } else if (item.kind === 'QQ') {
+        Column({ space: 4 }) {
+          Text('引用').fontSize(10).fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
+          Text(item.text).fontSize(14).fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
+        }.alignItems(HorizontalAlign.Start)
+      } else {
+        Flex({ wrap: FlexWrap.Wrap }) {
+          ForEach(item.segments, (segment: DraftySegment, index: number) => {
+            Text(segment.text)
+              .fontSize(15)
+              .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
+              .fontWeight(segment.styles.indexOf('ST') >= 0 ? FontWeight.Bold : FontWeight.Normal)
+              .fontStyle(segment.styles.indexOf('EM') >= 0 ? FontStyle.Italic : FontStyle.Normal)
+              .decoration({ type: segment.styles.indexOf('DL') >= 0 ? TextDecorationType.LineThrough : TextDecorationType.None })
+          }, (segment: DraftySegment, index: number) => `${item.id}-${index}`)
+        }
+      }
+    }.alignItems(HorizontalAlign.Start)
+  }
+
+  @Builder
+  messageRow(item: DemoMessage) {
+    Column({ space: 6 }) {
+      if (item.showTime) {
+        Text(item.timeText).fontSize(11).fontColor(DemoTheme.textHint)
+          .width('100%').textAlign(TextAlign.Center).margin({ top: 6, bottom: 2 })
       }
       Row({ space: 8 }) {
-        TextInput({ text: this.topicInput, placeholder: '打开会话：usrXXXXXX' }).layoutWeight(1)
-          .onChange((v: string) => { this.topicInput = v; })
-        Button('打开').onClick(() => {
-          const c = this.clientOrNull();
-          if (c === null || this.topicInput.length === 0) return;
-          c.openTopic(this.topicInput);
-          this.currentTopic = this.topicInput;
-          this.cacheLine = c.cacheLine();
-          this.view = 2;
-        })
-        Button('发给自己').onClick(() => {
-          const c = this.clientOrNull();
-          if (c === null) return;
-          const uid = c.myUid();
-          this.myUid = uid;
-          if (uid.length === 0) { this.append('还没有 uid：先注册或登录'); return; }
-          c.openTopic(uid);
-          this.currentTopic = uid;
-          this.cacheLine = c.cacheLine();
-          this.view = 2;
-        })
-      }
-      Text(this.myUid.length > 0 ? `我的 uid：${this.myUid}` : '').fontSize(11)
-      Text(`会话 ${this.conversations.length} 个 · 已登记主题 ${this.subscribedCount} 个`).fontSize(12)
-      List({ space: 6 }) {
-        ForEach(this.conversations, (item: DemoConversation) => {
-          ListItem() {
-            Column({ space: 2 }) {
-              Row({ space: 6 }) {
-                Text(item.name).fontSize(16).fontWeight(FontWeight.Medium)
-                if (item.unread > 0) Text(`未读 ${item.unread}`).fontSize(11)
-                if (item.online) Text('在线').fontSize(11)
-                if (item.lastSeenMs > 0) Text(`最后在线 ${new Date(item.lastSeenMs).toLocaleString()}`).fontSize(10)
-              }
-              Text(`topic=${item.topic} seq=${item.seq}${item.accessSummary.length > 0 ? ` 权限=${item.accessSummary}` : ''}`).fontSize(11)
-            }.width('100%').alignItems(HorizontalAlign.Start)
-          }.onClick(() => {
-            const c = this.clientOrNull();
-            if (c !== null) {
-              c.openTopic(item.topic);
-              this.currentTopic = item.topic;
-              this.subscribedCount = c.topics().length;
-              this.cacheLine = c.cacheLine();
-              this.view = 2;
+        if (!item.isMine) {
+          this.avatar(this.peerName, item.topic, 32)
+        } else {
+          Blank().width(32)
+        }
+        Column({ space: 2 }) {
+          Row({ space: 6 }) {
+            if (item.isMine) { Blank().layoutWeight(1) }
+            Column() { this.messageContent(item) }
+              .padding({ left: DemoTheme.bubblePaddingH, right: DemoTheme.bubblePaddingH, top: DemoTheme.bubblePaddingV, bottom: DemoTheme.bubblePaddingV })
+              .constraintSize({ maxWidth: DemoTheme.bubbleMaxWidth })
+              .backgroundColor(item.isMine ? DemoTheme.bubbleMine : DemoTheme.bubblePeer)
+              .borderRadius(DemoTheme.bubbleRadius)
+              .border(item.isMine ? { width: 0 } : { width: 0.5, color: DemoTheme.bubbleBorder })
+            if (!item.isMine) { Blank().layoutWeight(1) }
+          }.width('100%').alignItems(VerticalAlign.Top)
+          if (item.isMine && item.status.length > 0) {
+            Text(deliveryMarkOf(item.status)).fontSize(10)
+              .fontColor(item.status === 'failed' ? DemoTheme.danger : DemoTheme.textHint)
+              .width('100%').textAlign(TextAlign.End).padding({ right: 4 })
+          }
+        }.layoutWeight(1)
+      }.width('100%').alignItems(VerticalAlign.Top)
+    }.width('100%')
+  }
+
+  @Builder
+  attachPanel() {
+    Column({ space: 10 }) {
+      Row({ space: 10 }) {
+        Button('图片').layoutWeight(1).height(40).borderRadius(10)
+          .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(13)
+          .onClick(() => { this.showAttach = false; this.pickAndSendImage(); })
+        Button('文件').layoutWeight(1).height(40).borderRadius(10)
+          .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(13)
+          .onClick(() => { this.showAttach = false; this.pickAndSendDocument(); })
+        Button('位置').layoutWeight(1).height(40).borderRadius(10)
+          .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(13)
+          .onClick(() => {
+            this.showAttach = false;
+            const client = this.clientOrNull();
+            if (client !== null) client.sendLocation('公司', 31.86, 117.28);
+          })
+      }.width('100%')
+      Row({ space: 10 }) {
+        Button('表情').layoutWeight(1).height(40).borderRadius(10)
+          .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(13)
+          .onClick(() => {
+            this.showAttach = false;
+            const client = this.clientOrNull();
+            if (client !== null) client.sendSticker('😀');
+          })
+        Button('引用末条').layoutWeight(1).height(40).borderRadius(10)
+          .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(13)
+          .onClick(() => {
+            this.showAttach = false;
+            const client = this.clientOrNull();
+            if (client !== null && this.messages.length > 0) {
+              client.sendQuote('收到', this.messages[this.messages.length - 1].seq);
             }
           })
-        }, (item: DemoConversation) => item.topic)
-      }.layoutWeight(1).width('100%')
-    }.width('100%').height('100%').alignItems(HorizontalAlign.Start)
+        Button('图片(旧路径)').layoutWeight(1).height(40).borderRadius(10)
+          .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(12)
+          .onClick(() => {
+            this.showAttach = false;
+            const client = this.clientOrNull();
+            if (client !== null) client.sendLocalFile('photo.jpg', 'image/jpeg', 240 * 1024);
+          })
+      }.width('100%')
+      if (this.uploadNote.length > 0) {
+        Text(`${this.uploadNote}${this.uploadPercent > 0 && this.uploadPercent < 100 ? `（${this.uploadPercent}%）` : ''}`)
+          .fontSize(11).fontColor(DemoTheme.textHint)
+      }
+    }
+    .width('100%').padding(12).backgroundColor(Color.White)
   }
 
   @Builder
   chatView() {
-    Column({ space: 8 }) {
-      Text(`3 · 聊天 ${this.currentTopic}`).fontSize(18).fontWeight(FontWeight.Bold)
+    Column() {
+      Row({ space: 10 }) {
+        Text('‹').fontSize(26).fontColor(DemoTheme.textPrimary).onClick(() => { this.view = 1; })
+        Column({ space: 2 }) {
+          Text(this.peerName.length > 0 ? this.peerName : this.currentTopic).fontSize(16).fontWeight(FontWeight.Medium)
+          Text(this.peerOnline ? '在线' : (this.peerSeen.length > 0 ? this.peerSeen : this.currentTopic))
+            .fontSize(11).fontColor(this.peerOnline ? DemoTheme.success : DemoTheme.textHint)
+        }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+        Text('更早').fontSize(13).fontColor(DemoTheme.brand).onClick(() => {
+          const client = this.clientOrNull();
+          if (client !== null && this.messages.length > 0) client.loadHistory(this.currentTopic, this.messages[0].seq, 30);
+        })
+        Text('已读').fontSize(13).fontColor(DemoTheme.brand).onClick(() => {
+          const client = this.clientOrNull();
+          if (client !== null && this.messages.length > 0) client.markRead(this.messages[this.messages.length - 1].seq);
+        })
+      }
+      .width('100%').height(DemoTheme.appBarHeight).padding({ left: 12, right: 12 })
+      .backgroundColor(Color.White).border({ width: { bottom: 0.5 }, color: DemoTheme.divider })
+
+      if (this.messages.length === 0) {
+        Column({ space: 6 }) {
+          Text('这里还没有消息').fontSize(14).fontColor(DemoTheme.textSecondary)
+          Text('发一条试试；也可以点「加号」发图片/文件/位置/表情').fontSize(12).fontColor(DemoTheme.textHint)
+        }.layoutWeight(1).justifyContent(FlexAlign.Center).width('100%')
+      } else {
+        List({ space: 2 }) {
+          ForEach(this.messages, (item: DemoMessage) => {
+            ListItem() { this.messageRow(item) }
+          }, (item: DemoMessage) => item.id)
+        }
+        .layoutWeight(1).width('100%').padding({ left: 12, right: 12, top: 8 })
+      }
+
+      if (this.showAttach) { this.attachPanel() }
+
       Row({ space: 8 }) {
-        Button('← 列表').onClick(() => { this.view = 1; })
-        Button('拉更早').onClick(() => { const c = this.clientOrNull(); if (c !== null && this.messages.length > 0) c.loadHistory(this.currentTopic, this.messages[0].seq, 30); })
-        Button('正在输入').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendTyping(); })
-        Button('全部已读').onClick(() => {
-          const c = this.clientOrNull();
-          if (c !== null && this.messages.length > 0) c.markRead(this.messages[this.messages.length - 1].seq);
-        })
+        Text(this.voiceMode ? '⌨️' : '🎤').fontSize(20)
+          .onClick(() => { this.voiceMode = !this.voiceMode; })
+        if (this.voiceMode) {
+          Text(this.recording ? `松开发送（${this.voiceLevel}%）` : '按住说话')
+            .layoutWeight(1).height(40).textAlign(TextAlign.Center)
+            .fontSize(14).fontColor(DemoTheme.textPrimary)
+            .backgroundColor(this.recording ? DemoTheme.surface : DemoTheme.fieldFill)
+            .borderRadius(20)
+            .onTouch((event: TouchEvent) => {
+              if (event.type === TouchType.Down) this.startRecording();
+              else if (event.type === TouchType.Up) this.stopRecording(true);
+              else if (event.type === TouchType.Cancel) this.stopRecording(false);
+            })
+        } else {
+          TextInput({ text: $$this.draft, placeholder: '输入消息' })
+            .layoutWeight(1).height(40).backgroundColor(DemoTheme.fieldFill).borderRadius(20)
+          Text(this.bold ? 'B✓' : 'B').fontSize(15).fontWeight(FontWeight.Bold)
+            .fontColor(this.bold ? DemoTheme.brand : DemoTheme.textSecondary)
+            .onClick(() => { this.bold = !this.bold; })
+          Text('I').fontSize(15).fontStyle(FontStyle.Italic)
+            .fontColor(this.italic ? DemoTheme.brand : DemoTheme.textSecondary)
+            .onClick(() => { this.italic = !this.italic; })
+          Text('＋').fontSize(22).fontColor(DemoTheme.textSecondary)
+            .onClick(() => { this.showAttach = !this.showAttach; })
+          Button('发送').height(40).borderRadius(20).fontSize(14)
+            .backgroundColor(this.draft.length > 0 ? DemoTheme.brand : DemoTheme.border)
+            .enabled(this.draft.length > 0)
+            .onClick(() => {
+              const client = this.clientOrNull();
+              if (client === null || this.draft.length === 0) return;
+              client.sendText(this.draft, this.bold, this.italic);
+              this.draft = '';
+            })
+        }
       }
-      Row({ space: 6 }) {
-        Button('图片').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendLocalFile('photo.jpg', 'image/jpeg', 240 * 1024); })
-        Button('文件').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendLocalFile('report.pdf', 'application/pdf', 3 * 1024 * 1024); })
-        Button('位置').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendLocation('公司', 31.86, 117.28); })
-        Button('表情').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendSticker('😀'); })
-        Button('引用末条').onClick(() => {
-          const c = this.clientOrNull();
-          if (c !== null && this.messages.length > 0) c.sendQuote('引用一下', this.messages[this.messages.length - 1].seq);
-        })
-      }
-      Row({ space: 6 }) {
-        Button('选图').onClick(() => { this.pickAndSendImage(); })
-        Button('选文件').onClick(() => { this.pickAndSendDocument(); })
-        Button(this.recording ? `松开发送 ${this.voiceLevel}%` : '按住说话')
-          .backgroundColor(this.recording ? '#D0D4DD' : undefined)
-          .onTouch((event: TouchEvent) => {
-            if (event.type === TouchType.Down) this.startRecording();
-            else if (event.type === TouchType.Up) this.stopRecording(true);
-            else if (event.type === TouchType.Cancel) this.stopRecording(false);
-          })
-      }
-      Text(this.pickedNote).fontSize(11)
-      Text(this.uploadNote.length > 0 ? `${this.uploadNote}（${this.uploadPercent}%）` : '').fontSize(11)
-      Text(this.cacheLine).fontSize(10)
-      List({ space: 4 }) {
-        ForEach(this.messages, (item: DemoMessage) => {
-          ListItem() {
-            Column({ space: 2 }) {
-              Row({ space: 4 }) {
-                Text(item.isMine ? '我' : '对方').fontSize(11)
-                Text(`#${item.seq}`).fontSize(10)
-              }
-              // 富文本：按 segments 渲染（加粗/斜体/等距）
-              Flex({ wrap: FlexWrap.Wrap }) {
-                ForEach(item.segments, (segment: DraftySegment, index: number) => {
-                  Text(segment.text)
-                    .fontSize(15)
-                    .fontWeight(segment.styles.indexOf('ST') >= 0 ? FontWeight.Bold : FontWeight.Normal)
-                    .fontStyle(segment.styles.indexOf('EM') >= 0 ? FontStyle.Italic : FontStyle.Normal)
-                }, (segment: DraftySegment, index: number) => `${item.id}-${index}`)
-              }
-              if (item.segments.length === 0) Text(item.text).fontSize(15)
-              if (item.kind !== 'text') Text(`[${item.kind} 附件] ${item.text}`).fontSize(12)
-            }.width('100%').alignItems(HorizontalAlign.Start)
-          }.onClick(() => { const c = this.clientOrNull(); if (c !== null) c.markRead(item.seq); })
-        }, (item: DemoMessage) => item.id)
-      }.layoutWeight(1).width('100%')
-      Row({ space: 8 }) {
-        TextInput({ text: this.draft, placeholder: '输入消息' }).layoutWeight(1).onChange((v: string) => { this.draft = v; })
-        Toggle({ type: ToggleType.Checkbox, isOn: this.bold }).onChange((on: boolean) => { this.bold = on; })
-        Text('B').fontWeight(FontWeight.Bold)
-        Toggle({ type: ToggleType.Checkbox, isOn: this.italic }).onChange((on: boolean) => { this.italic = on; })
-        Text('I').fontStyle(FontStyle.Italic)
-        Button('发送').onClick(() => {
-          const c = this.clientOrNull();
-          if (c === null || this.draft.length === 0) return;
-          c.sendText(this.draft, this.bold, this.italic);
-          this.draft = '';
-        })
-      }.width('100%')
-    }.width('100%').height('100%').alignItems(HorizontalAlign.Start)
+      .width('100%').padding({ left: 12, right: 12, top: 8, bottom: 8 })
+      .backgroundColor(Color.White).border({ width: { top: 0.5 }, color: DemoTheme.divider })
+    }
+    .width('100%').height('100%').backgroundColor(DemoTheme.pageBackground)
   }
+
+  // ── 3 · 能力清单 ───────────────────────────────────────────────────────────
 
   @Builder
   capabilityView() {
-    Column({ space: 8 }) {
-      Text('4 · SDK 能力清单').fontSize(18).fontWeight(FontWeight.Bold)
-      Button('← 会话列表').onClick(() => { this.view = 1; })
-      List({ space: 6 }) {
-        ForEach(CAPABILITIES, (row: string[]) => {
+    Column() {
+      Row({ space: 10 }) {
+        Text('‹').fontSize(26).fontColor(DemoTheme.textPrimary).onClick(() => { this.view = 1; })
+        Text('SDK 能力清单').fontSize(18).fontWeight(FontWeight.Bold).layoutWeight(1)
+      }
+      .width('100%').height(DemoTheme.appBarHeight).padding({ left: 12, right: 12 }).backgroundColor(Color.White)
+
+      List({ space: 12 }) {
+        ForEach(CAPABILITY_GROUPS, (group: CapabilityGroup) => {
           ListItem() {
-            Column({ space: 2 }) {
-              Text(row[0]).fontSize(14).fontWeight(FontWeight.Medium)
-              Text(row[1]).fontSize(11)
-              Text(row[2]).fontSize(10)
-            }.width('100%').alignItems(HorizontalAlign.Start)
+            Column({ space: 10 }) {
+              Text(group.title).fontSize(14).fontWeight(FontWeight.Bold).fontColor(DemoTheme.textPrimary)
+              ForEach(group.rows, (row: CapabilityRow) => {
+                Row({ space: 8 }) {
+                  Text(row.status).fontSize(13)
+                  Column({ space: 2 }) {
+                    Text(row.name).fontSize(13).fontColor(DemoTheme.textPrimary)
+                    Text(row.api).fontSize(11).fontColor(DemoTheme.textSecondary)
+                    Text(row.where).fontSize(10).fontColor(DemoTheme.textHint)
+                  }.alignItems(HorizontalAlign.Start).layoutWeight(1)
+                }.width('100%')
+              }, (row: CapabilityRow) => row.name)
+            }
+            .width('100%').padding(14).backgroundColor(Color.White).borderRadius(DemoTheme.cardRadius)
           }
-        }, (row: string[]) => row[0])
-      }.layoutWeight(1).width('100%')
-    }.width('100%').height('100%').alignItems(HorizontalAlign.Start)
+        }, (group: CapabilityGroup) => group.title)
+      }
+      .layoutWeight(1).width('100%').padding(12)
+    }
+    .width('100%').height('100%').backgroundColor(DemoTheme.pageBackground)
   }
 
   build() {
-    Column({ space: 8 }) {
-      Text('tinode-harmony 示例').fontSize(20).fontWeight(FontWeight.Bold)
-      if (this.view === 0) { this.connectionView() }
+    Stack() {
+      if (this.view === 0) { this.loginView() }
       else if (this.view === 1) { this.conversationView() }
       else if (this.view === 2) { this.chatView() }
       else { this.capabilityView() }
-      Text(`日志（最近 ${this.logLines.length} 条）`).fontSize(11)
-      List({ space: 2 }) {
-        ForEach(this.logLines, (line: string, index: number) => {
-          ListItem() { Text(line).fontSize(10) }
-        }, (line: string, index: number) => `${index}-${line}`)
-      }.height(120).width('100%')
-    }.width('100%').height('100%').padding(12).alignItems(HorizontalAlign.Start)
+    }
+    .width('100%').height('100%')
   }
 }

@@ -18,13 +18,15 @@ import {
   CachedTinodeStorage, Drafty, DraftySegment, ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres,
   ImSessionConfig, ImSessionState, MemoryTinodeStorage, StorageCacheStats, Tinode, TinodeAuth, TinodeHooks,
   TinodeMessage, TinodeOptions, TinodeProfile, TinodeSubscribeOptions, TinodeTopic, TinodeTopicState,
-  acsSummary, attachmentDrafty,
+  acsSummary, attachmentDrafty, attachmentOfDrafty,
   cacheKeyOf, defaultSessionConfig, DelRange, draftyLink, draftyWithEntity, attachmentUploadUrl, uploadedRefOf, draftyPlain, draftySegments, draftyWithStyle, parseDraftyJson, planChunks,
   progressPercent, validateAttachment
 } from '../tinode/Index.ts';
 import { TinodeSocket } from '../tinode/Socket.ets';
 import { HarmonyAttachmentHttp } from '../tinode/TinodeAttachmentHttp.ets';
 import { PickedFile, RecordedVoice } from './DemoPickers';
+import { durationTextOf, needsTimeLabel, previewOfKind, sizeTextOf, timeLabelOf } from './DemoFormat';
+import type { AttachmentMeta } from '../tinode/Index.ts';
 
 /** 页面展示用的一条消息（把线路消息 + 富文本片段合在一起）。 */
 export interface DemoMessage {
@@ -36,6 +38,14 @@ export interface DemoMessage {
   text: string;
   segments: DraftySegment[];
   kind: string;
+  /** 展示层：是否需要插时间标签、标签文案、送达状态。 */
+  showTime: boolean;
+  timeText: string;
+  status: string;
+  /** 附件类消息的展示信息。 */
+  fileName: string;
+  fileSize: number;
+  durationMs: number;
 }
 
 /** 页面展示用的一个会话。 */
@@ -49,6 +59,9 @@ export interface DemoConversation {
   seq: number;
   subscribed: boolean;
   accessSummary: string;
+  /** 展示层：最后一条消息预览与时间。 */
+  preview: string;
+  timeText: string;
 }
 
 /** 回调：页面实现它接收数据（避免页面直接持有 SDK 类型）。 */
@@ -78,6 +91,12 @@ export class DemoClient {
   private apiKey: string = '';
   private serverBase: string = '';
   private authToken: string = '';
+  /** 在途的 pub 报文：帧 id → 本地消息 id（ctl 回来时按 seq 更新送达状态）。 */
+  private pendingPub: Map<string, string> = new Map();
+  /** 本地消息 id → 报文 id（重发/失败的展示用）。 */
+  private statusByLocalId: Map<string, string> = new Map();
+  /** 订阅完成前排队等待发送的动作。 */
+  private pendingSends: (() => void)[] = [];
 
   constructor(listener: DemoListener) {
     this.listener = listener;
@@ -99,14 +118,28 @@ export class DemoClient {
       onState: (state: ImSessionState) => this.listener.onState(state, ''),
       onServerVersion: (version: string) => this.listener.onState('ready', `服务端协议 ${version}`),
       onTopics: (topics: TinodeTopic[]) => this.emitConversations(topics),
-      onTopicState: (state: TinodeTopicState) => this.listener.onLog(`主题 ${state.topic} 已订阅=${state.subscribed} lastSeq=${state.lastSeq}`),
+      onTopicState: (state: TinodeTopicState) => {
+        this.listener.onLog(`主题 ${state.topic} 已订阅=${state.subscribed} lastSeq=${state.lastSeq}`);
+        if (state.subscribed) this.flushPendingSends();      // 订阅成功后再补发排队中的消息
+      },
       onRawData: undefined,
       onMessage: (message: TinodeMessage) => this.appendMine(message),
       onMeta: (meta: ImMeta) => this.listener.onLog(`meta（${meta.sub === undefined ? 0 : meta.sub.length} 条订阅）`),
       onPres: (pres: ImPres) => this.listener.onLog(`presence ${pres.topic} ${pres.what === undefined ? '' : pres.what}`),
       onNote: (note: ImNote) => this.listener.onLog(`note ${note.topic === undefined ? '' : note.topic} ${note.what === undefined ? '' : note.what}`),
       onInfo: (info: ImInfo) => this.listener.onLog(`info ${info.topic}`),
-      onCtrl: (ctrl: ImCtrl) => this.listener.onLog(`ctrl code=${ctrl.code}`),
+      onCtrl: (ctrl: ImCtrl) => {
+        const frameId = ctrl.id === undefined ? '' : ctrl.id;
+        const localId = this.pendingPub.get(frameId);
+        if (localId !== undefined && ctrl.code >= 200 && ctrl.code < 300) {
+          this.pendingPub.delete(frameId);
+          this.markStatus(localId, 'sent');
+        } else if (localId !== undefined && ctrl.code >= 400) {
+          this.pendingPub.delete(frameId);
+          this.markStatus(localId, 'failed');
+        }
+        this.listener.onLog(`ctrl code=${ctrl.code}`);
+      },
       onFailure: (text: string) => this.listener.onState('failed', text),
       onAuth: (auth: TinodeAuth) => {
         this.authToken = auth.token;                       // 附件上传要带 token（HTTP 侧不是 WS 会话）
@@ -166,6 +199,30 @@ export class DemoClient {
     if (this.apiKey.length > 0) headers['X-Tinode-APIKey'] = this.apiKey;
     if (this.authToken.length > 0) headers['X-Tinode-Auth'] = this.authToken;
     return headers;
+  }
+
+  /**
+   * 订阅成功前不发消息：Tinode 对"还没订阅就 pub"会回 409。
+   * `whenSubscribed` 把动作排队，等 `onTopicState(subscribed=true)` 时统一补发。
+   */
+  private whenSubscribed(action: () => void): void {
+    const client = this.tinode;
+    const state = client === null ? null : client.topicState(this.currentTopic);
+    if (state !== null && state.subscribed) {
+      action();
+      return;
+    }
+    this.pendingSends.push(action);
+    this.listener.onLog('会话还在订阅中，消息已排队，订阅完成后自动发送');
+  }
+
+  /** 订阅完成后补发排队消息。 */
+  private flushPendingSends(): void {
+    if (this.pendingSends.length === 0) return;
+    const queued = this.pendingSends;
+    this.pendingSends = [];
+    for (let i = 0; i < queued.length; i++) queued[i]();
+    this.listener.onLog(`已补发 ${queued.length} 条排队消息`);
   }
 
   /** 由 ws(s) 端点推导 http(s) 基地址（附件上传用；推导不出返回空串走"仅本地 ref"路径）。 */
@@ -307,7 +364,13 @@ export class DemoClient {
     let drafty: Drafty = draftyPlain(text);
     if (bold) drafty = draftyWithStyle(drafty, 0, text.length, 'ST');
     if (italic) drafty = draftyWithStyle(drafty, 0, text.length, 'EM');
-    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    const localId = `local-${Date.now()}`;
+    this.appendLocal(localId, this.currentTopic, text, draftySegments(drafty), 'text', 'sending');
+    this.whenSubscribed(() => {
+      const frameId = client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+      if (frameId.length > 0) this.pendingPub.set(frameId, localId);
+      else this.markStatus(localId, 'failed');
+    });
     this.listener.onLog(`发送（${text.length} 字${bold ? '，加粗' : ''}${italic ? '，斜体' : ''}）`);
   }
 
@@ -331,7 +394,7 @@ export class DemoClient {
     }
     // 无后端时用本地 ref 占位，演示消息内容结构（实体 + 名称/大小/mime）
     const drafty = attachmentDrafty({ name: name, mime: mime, size: size }, { ref: cacheKeyOf(name, mime) }, name);
-    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    this.whenSubscribed(() => client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' }));
     this.listener.onLog(`附件消息已发送（本地 ref，未真正上传）`);
   }
 
@@ -340,7 +403,7 @@ export class DemoClient {
     const client = this.tinode;
     if (client === null || this.currentTopic.length === 0) return;
     const drafty = draftyWithEntity(draftyPlain(text), 0, text.length, 'QQ', { val: `seq:${quotedSeq}` });
-    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    this.whenSubscribed(() => client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' }));
     this.listener.onLog(`引用 seq=${quotedSeq} 并发送`);
   }
 
@@ -350,7 +413,7 @@ export class DemoClient {
     if (client === null || this.currentTopic.length === 0) return;
     const text = `${label}`;
     const drafty = draftyLink(draftyPlain(text), 0, text.length, `geo:${lat},${lng}`);
-    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    this.whenSubscribed(() => client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' }));
     this.listener.onLog(`位置已发送 ${label}`);
   }
 
@@ -358,7 +421,7 @@ export class DemoClient {
   sendSticker(emoji: string): void {
     const client = this.tinode;
     if (client === null || this.currentTopic.length === 0) return;
-    client.publish(this.currentTopic, draftyPlain(emoji), { mime: 'text/x-drafty' });
+    this.whenSubscribed(() => client.publish(this.currentTopic, draftyPlain(emoji), { mime: 'text/x-drafty' }));
     this.listener.onLog(`表情已发送 ${emoji}`);
   }
 
@@ -407,14 +470,30 @@ export class DemoClient {
     return client === null ? [] : client.profiles();
   }
 
+  /** 某个会话的最后一条消息（会话列表预览用）。 */
+  private lastMessageOfTopic(topic: string): DemoMessage | null {
+    const bucket = this.messagesByTopic.get(topic);
+    if (bucket === undefined || bucket.length === 0) return null;
+    let last: DemoMessage | null = null;
+    for (let i = 0; i < bucket.length; i++) {
+      if (last === null || bucket[i].ts >= last.ts) last = bucket[i];
+    }
+    return last;
+  }
+
   /** 自己发出的消息（门面 `onMessage` 回调，落库后的回显）。 */
   private appendMine(message: TinodeMessage): void {
     const drafty = message.content;
     const segments = draftySegments(drafty);
+    const attachment: AttachmentMeta | null = attachmentOfDrafty(drafty);
+    const kind = segments.length > 0 && segments[0].entity !== null ? segments[0].entity.tp : 'text';
     const item: DemoMessage = {
       id: message.id, topic: message.topic, seq: message.seq, isMine: message.isMine, ts: message.ts,
-      text: drafty === null ? '' : drafty.txt, segments: segments,
-      kind: segments.length > 0 && segments[0].entity !== null ? segments[0].entity.tp : 'text'
+      text: drafty === null ? '' : drafty.txt, segments: segments, kind: kind,
+      showTime: false, timeText: timeLabelOf(message.ts, Date.now()), status: 'sent',
+      fileName: attachment === null ? '' : attachment.name,
+      fileSize: attachment === null ? 0 : attachment.size,
+      durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration
     };
     let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
@@ -429,7 +508,54 @@ export class DemoClient {
       }
     }
     if (!replaced) bucket.push(item);
+    this.decorate(bucket);
     if (message.topic === this.currentTopic) this.listener.onMessages(bucket.slice());
+  }
+
+  /** 本地先落一条消息（发送中），等 ctrl 回来再改状态。 */
+  private appendLocal(localId: string, topic: string, text: string, segments: DraftySegment[],
+    kind: string, status: string): void {
+    let bucket = this.messagesByTopic.get(topic);
+    if (bucket === undefined) {
+      bucket = [];
+      this.messagesByTopic.set(topic, bucket);
+    }
+    const now = Date.now();
+    bucket.push({
+      id: localId, topic: topic, seq: -1, isMine: true, ts: now, text: text, segments: segments, kind: kind,
+      showTime: false, timeText: timeLabelOf(now, now), status: status,
+      fileName: '', fileSize: 0, durationMs: 0
+    });
+    this.statusByLocalId.set(localId, status);
+    this.decorate(bucket);
+    if (topic === this.currentTopic) this.listener.onMessages(bucket.slice());
+  }
+
+  /** 更新某条本地消息的送达状态。 */
+  private markStatus(localId: string, status: string): void {
+    this.statusByLocalId.set(localId, status);
+    this.messagesByTopic.forEach((bucket: DemoMessage[], topic: string) => {
+      for (let i = 0; i < bucket.length; i++) {
+        if (bucket[i].id === localId) bucket[i].status = status;
+      }
+      if (topic === this.currentTopic) this.listener.onMessages(bucket.slice());
+    });
+  }
+
+  /** 计算时间标签（相邻间隔 > 5 分钟插一条）并按时间排序。 */
+  private decorate(bucket: DemoMessage[]): void {
+    bucket.sort((left: DemoMessage, right: DemoMessage): number => left.ts - right.ts);
+    let previous: TinodeMessage | null = null;
+    for (let i = 0; i < bucket.length; i++) {
+      const item = bucket[i];
+      const asWire: TinodeMessage = {
+        id: item.id, topic: item.topic, seq: item.seq, from: '', isMine: item.isMine, ts: item.ts,
+        content: null, head: null
+      };
+      item.showTime = needsTimeLabel(previous, asWire);
+      item.timeText = timeLabelOf(item.ts, Date.now());
+      previous = asWire;
+    }
   }
 
   /** 会话列表推送（SDK 的 `onTopics`）。 */
@@ -437,6 +563,8 @@ export class DemoClient {
     const list: DemoConversation[] = [];
     for (let i = 0; i < topics.length; i++) {
       const topic = topics[i];
+      if (topic.topic === 'me') continue;              // `me` 是"我的订阅列表"这个伪主题，不是会话
+      const last = this.lastMessageOfTopic(topic.topic);
       list.push({
         topic: topic.topic,
         name: topic.name.length > 0 ? topic.name : topic.topic,
@@ -446,9 +574,12 @@ export class DemoClient {
         lastSeenMs: topic.lastSeenMs === undefined ? 0 : topic.lastSeenMs,
         seq: topic.seq,
         subscribed: true,
-        accessSummary: this.accessOf(topic.topic)
+        accessSummary: this.accessOf(topic.topic),
+        preview: last === null ? '' : previewOfKind(last.kind, last.text),
+        timeText: last === null ? '' : timeLabelOf(last.ts, Date.now())
       });
     }
+    list.sort((left: DemoConversation, right: DemoConversation): number => right.seq - left.seq);
     this.listener.onConversations(list);
   }
 
@@ -458,6 +589,8 @@ export class DemoClient {
     const segments = draftySegments(drafty);
     let text = '';
     if (drafty !== null) text = drafty.txt;
+    const attachment: AttachmentMeta | null = attachmentOfDrafty(drafty);
+    const receivedKind = segments.length > 0 && segments[0].entity !== null ? segments[0].entity.tp : 'text';
     const message: DemoMessage = {
       id: `${data.topic}-${data.seq}`,
       topic: data.topic,
@@ -466,7 +599,11 @@ export class DemoClient {
       ts: Date.now(),
       text: text,
       segments: segments,
-      kind: segments.length > 0 && segments[0].entity !== null ? segments[0].entity.tp : 'text'
+      kind: receivedKind,
+      showTime: false, timeText: timeLabelOf(Date.now(), Date.now()), status: 'delivered',
+      fileName: attachment === null ? '' : attachment.name,
+      fileSize: attachment === null ? 0 : attachment.size,
+      durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration
     };
     let bucket = this.messagesByTopic.get(data.topic);
     if (bucket === undefined) {
@@ -474,6 +611,7 @@ export class DemoClient {
       this.messagesByTopic.set(data.topic, bucket);
     }
     bucket.push(message);
+    this.decorate(bucket);
     if (data.topic === this.currentTopic) this.listener.onMessages(bucket.slice());
     this.listener.onLog(`收到 ${data.topic} seq=${data.seq}`);
   }

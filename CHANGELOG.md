@@ -10,6 +10,16 @@
   并加了回归测试（未认证时不得出现 `sub{topic:"me"}`）。
 - 真机验证（示例 App，2026-09-17）：注册成功 → `凭据已签发 uid=usr…` → `主题 me 已订阅=true` → `ctrl 200/204`。
 
+### 示例：界面重做（像真实 IM）
+- 新增 `demo/DemoTheme.ets`（品牌色/文本色/气泡色/圆角/头像尺寸，数值照宿主 App 与 Android 基线）与 `demo/DemoFormat.ets`（时间标签 5 分钟规则、送达标记、文件大小、时长、附件预览前缀）；
+- `pages/Index.ets` 重写为 4 个视图：**登录/连接**（品牌区 + 状态徽标 + 卡片式带标签输入 + 主/次按钮 + 运行日志）、
+  **会话列表**（顶部栏 + 圆形首字母头像 + 名字/预览/时间/未读徽标/在线点 + 空状态）、
+  **聊天**（顶部栏含在线/最后在线、气泡（自己品牌色靠右/对方白底靠左、圆角 12、最大宽 260）、时间标签、送达标记、对方头像、
+  富文本按 `draftySegments` 渲染、图片/文件/语音/引用气泡、输入栏含 B/I/＋/发送、按住说话模式、空会话提示）、
+  **能力清单**（分组卡片 + API + 源码位置 + ✅/⚠️/❌ 状态徽标）；
+- 交互修正：注册/登录成功自动进入会话列表；`TextInput` 用 `$$` 绑定（异步读到的本地配置能显示）；会话列表过滤掉 `me` 伪主题；
+  **订阅完成前发送排队**（Tinode 对"未订阅就 pub"回 409），订阅成功后自动补发。
+
 ### 示例：系统 picker 与麦克风录音
 - `examples/harmony/entry/src/main/ets/demo/DemoPickers.ets`：图片（`photoAccessHelper.PhotoViewPicker`）、文件（`picker.DocumentViewPicker`）、
   麦克风录音（`@kit.AudioKit` 的 `AudioCapturer`，16 kHz/单声道/S16LE，照宿主 App 已真机验证的写法）与 S16LE 电平计算；
