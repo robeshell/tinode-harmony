@@ -8,3 +8,6 @@
 /** 平台传输入口（`.ets` 专用；`.ts` 侧请用 `./Index`）。 */
 export { TinodeSocket } from './TinodeSocket';
 export type { ImTransport, ImTransportHandlers } from './TinodeSession';
+
+// P2：附件上传/下载的平台实现（可选模块，用到才需要）。
+export { HarmonyAttachmentHttp } from './AttachmentHttp';

@@ -40,6 +40,17 @@
 | `open(handlers)` / `send(text)` / `close()` | 未就绪时 `send` 会回调 `handlers.onError`，不静默丢 |
 | `isOpen()` | 仅表示"已连上"，**不代表已认证** |
 
+## 附件（`ImAttachment.ts`，P2 可选模块）
+
+| 函数 | 作用 |
+| --- | --- |
+| `validateAttachment(meta, limits?)` | 大小/类型/文件名校验 → `{ok, reason}` |
+| `planChunks(total, chunk?)` / `initialProgress` / `mergeChunkProgress` / `uploadedBytesOf` / `progressPercent` / `isUploadComplete` | 大文件分块与进度 |
+| `attachmentDrafty(meta, ref, text?)` / `attachmentOfDrafty(drafty)` | 消息内容 ↔ 附件元数据（`IM/AU/VD/EX` 按 MIME） |
+| `cacheKeyOf` / `cacheBytesOf` / `planEviction` | 缓存键与 LRU 淘汰规划 |
+| `attachmentUploadUrl(serverBase)` / `uploadedRefOf(body)` | Tinode 上传地址与响应解析 |
+| `HarmonyAttachmentHttp`（`Socket.ets` 出口） | 平台 HTTP 上传/下载（**未真机验证**） |
+
 ## 纯函数（可直接单测/复用）
 
 `buildHi / buildLogin / buildSub / buildPub / buildGetHistory / buildNoteRead / buildNoteKeyPress / buildLeave /

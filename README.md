@@ -23,6 +23,7 @@ tinode.publish('usrXXXXXX', { txt: 'hi' });
 | 先跑起来（HarmonyOS / Node / HAR / 源码） | [docs/getting-started.md](./docs/getting-started.md) |
 | **把 SDK 指向我的 Tinode 服务**（wsUrl / apikey / token / scheme / 明文与 TLS / 自建服务） | [docs/configuration.md](./docs/configuration.md) |
 | 逐方法签名、返回与失败口径 | [docs/api.md](./docs/api.md) |
+| **附件**（上传/下载/分块/进度/缓存，可选模块） | [docs/attachments.md](./docs/attachments.md) |
 | 分层、状态机、三个端口、两种门面模式 | [docs/architecture.md](./docs/architecture.md) |
 | 凭据怎么处理、**为什么不要提交真实地址与密钥** | [docs/security.md](./docs/security.md) |
 | 连不上/403/UID mismatch/退避/脱敏 等排错 | [docs/troubleshooting.md](./docs/troubleshooting.md) |
@@ -43,7 +44,10 @@ tinode.publish('usrXXXXXX', { txt: 'hi' });
 **做**（P1 起）：**主题生命周期** —— SDK 记住每个会话的订阅意图与位点（`lastSeq`/`read`/`recv`），
 断线重连后**自动重新订阅**并可从 `lastSeq+1` 补历史；宿主可读 `knownTopics()/topicState()` 或监听 `onTopicState`。
 
-**不做**（有意留白）：群组（`grp`）、推送（`set{what:"deviceToken"}`）、附件上传下载（P2 计划中）、
+**做**（P2，可选模块）：**附件** —— 纯逻辑（校验/分块规划/进度/缓存键与 LRU 淘汰/Drafty 实体互转）在 `src/ImAttachment.ts`，
+平台 HTTP 在 `src/AttachmentHttp.ets`（只有需要 SDK 代传文件时才用；走自己后端的宿主只用纯逻辑）。
+
+**不做**（有意留白）：群组（`grp`）、推送（`set{what:"deviceToken"}`）、
 业务语义（送达状态、置顶、草稿策略）——这些留在宿主应用层。
 
 ## 2. 安装

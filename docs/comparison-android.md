@@ -105,7 +105,7 @@
 | 阶段 | 内容 | 量级 |
 | --- | --- | --- |
 | P1 | ✅ **已完成**（2026-09-17）：`TinodeTopics` + 自动重订阅 + `since` 补历史 + `knownTopics/topicState/onTopicState`，可关 | 已交付 |
-| P2 | **附件模块**（上传/下载/大文件/缓存/进度，作为可选模块） | 大（2–3 批） |
+| P2 | ✅ **已完成（可选模块）**：纯逻辑 `ImAttachment.ts`（校验/分块/进度/缓存/LRU/Drafty 互转）+ 平台 `AttachmentHttp.ets`（**未真机验证**）；断点续传/秒传/转码仍缺 | 已交付 |
 | P3 | **账号与凭据**（`acc`/`login` 全 scheme、`Credential`/`AuthScheme`） | 中（1 批） |
 | P4 | **本地存储与缓存策略**（`Storage`/`LocalData` 等价物 + 端口默认实现） | 中（1–2 批） |
 | P5 | **用户资料与权限**（`me`/`fnd` meta、`Acs`/`Defacs`、LastSeen） | 中（1–2 批） |

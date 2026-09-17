@@ -29,6 +29,15 @@
 - 可关：`TinodeOptions.autoResubscribe`、`TinodeOptions.syncHistoryOnReconnect`（默认都开），
   会话侧对应 `setAutoResubscribe(false)` / `setSyncHistoryOnReconnect(false)` —— 自己管订阅与增量同步的宿主可关掉。
 
+### 附件（P2，可选模块）
+- 新增 `src/ImAttachment.ts`（纯逻辑）：`validateAttachment`（大小/类型/文件名）、`planChunks` + `initialProgress` +
+  `mergeChunkProgress` + `uploadedBytesOf` + `progressPercent` + `isUploadComplete`（大文件分块与进度）、
+  `attachmentDrafty` / `attachmentOfDrafty`（消息内容 ↔ 附件元数据，实体类型按 MIME 选 `IM/AU/VD/EX`）、
+  `cacheKeyOf` / `cacheBytesOf` / `planEviction`（缓存键与 LRU 淘汰规划）、`attachmentUploadUrl` / `uploadedRefOf`（Tinode 上传地址与响应解析）；
+- 新增 `src/AttachmentHttp.ets`：HarmonyOS 平台的 `AttachmentTransferPort` 实现（multipart 上传 + 下载，带进度回调）——
+  **未真机验证**，且核心 SDK 不依赖它（宿主可继续用自己的后端附件接口）；
+- 索引：`Index.ts` 导出纯逻辑，`Socket.ets` 导出平台实现；`tools/check-sdk-hygiene.py` 的平台文件白名单同步更新。
+
 ### 日志
 - 明文 `ws://` 的提示走 **detail（level=warn）**，不再经 failure 通道（宿主不会把它渲染成"失败"）；
   真正需要拒绝明文时用 `new TinodeSocket(url, apiKey, false)`。
