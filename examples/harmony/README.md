@@ -33,3 +33,46 @@ bash examples/harmony/sync-sdk.sh      # ../../src → entry/src/main/ets/tinode
 ```
 
 （另一种形态是 HAR，见 `docs/getting-started.md`。）
+
+## 在 DevEco Studio 里导入（逐步）
+
+> 前提：DevEco Studio + HarmonyOS SDK 与你现有工程一致即可。本示例的工程配置就是照"能在这台机器上构建"的值写的：
+> `compatibleSdkVersion: 5.0.3(15)`、`targetSdkVersion: 26.0.0`、`modelVersion: 6.0.0`。
+
+1. **拿到代码**
+
+   ```bash
+   git clone https://github.com/robeshell/tinode-harmony.git
+   ```
+
+2. **打开工程**：DevEco Studio → **`File → Open…`** →
+   选中 **`tinode-harmony/examples/harmony`** 这个目录（⚠️ 不是仓库根目录；根目录不是一个 DevEco 工程）。
+   - 弹出 **Trust Project** → 信任；
+   - 弹出 **Sync / ohpm install** → 让它同步（没有第三方依赖，几秒就好）；
+   - 若提示 SDK / modelVersion 升级 → 接受（上面三个值就是从你现有工程抄的）。
+
+3. **配签名（真机运行才需要）**：**`File → Project Structure… → Signing Configs`** →
+   勾选 **Automatically generate signature**（需登录华为账号）→ Apply。
+   签名信息会被 DevEco 写进**你本地**的 `build-profile.json5`，**不要提交**（仓库里 `signingConfigs` 是空的）。
+
+4. **填服务配置**（二选一）：
+   - 页面输入框里直接填 `wsUrl / apikey / token / topic`；或
+   - ```bash
+     cp entry/src/main/resources/rawfile/im.local.json.example entry/src/main/resources/rawfile/im.local.json
+     # 编辑 im.local.json 填你自己的值（该文件已 gitignore）
+     ```
+   字段含义与取值见 [`docs/configuration.md`](../../docs/configuration.md)。
+
+5. **运行**：接真机 → 选 `entry` → **Run**。页面上点「连接」→ 状态走到 `ready` → 点「订阅并发一条」。
+
+6. **只出包不运行**：**`Build → Build Hap(s)/APP(s)`**，产物在
+   `entry/build/default/outputs/default/entry-default-unsigned.hap`（未签名）。
+
+### 常见坑
+
+| 现象 | 原因 |
+| --- | --- |
+| 打开后提示"不是工程/无法同步" | 打开的是仓库根目录，应该打开 `examples/harmony` |
+| Run 报签名错误 | 没做第 3 步（自动签名） |
+| 点「连接」提示 `token 为空` | 第 4 步没填；或勾上页面上的 `anonymous` 先自测 |
+| 改了 SDK 不生效 | 示例里的 SDK 是拷贝副本：跑 `bash sync-sdk.sh` 重新同步 |
