@@ -9,6 +9,8 @@
  */
 import { abilityAccessCtrl, common, Permissions } from '@kit.AbilityKit';
 import { audio } from '@kit.AudioKit';
+import { media } from '@kit.MediaKit';
+import { wavFromPcm } from '../tinode/Index.ts';
 import { fileIo } from '@kit.CoreFileKit';
 import { picker } from '@kit.CoreFileKit';
 import { photoAccessHelper } from '@kit.MediaLibraryKit';
@@ -27,6 +29,8 @@ export interface RecordedVoice {
   durationMs: number;
   /** 0–100 的简单电平（S16LE RMS），用于画一个简单的电平条。 */
   level: number;
+  /** 落盘的 WAV 路径（沙箱内，可直接播放）；写入失败为空串。 */
+  wavPath: string;
 }
 
 const MIC_PERMISSIONS: Permissions[] = ['ohos.permission.MICROPHONE'];
@@ -164,11 +168,17 @@ export function pcmLevel(bytes: Uint8Array): number {
 
 /** 录音器（内存累积；页面销毁必须 `release()`）。 */
 export class DemoVoiceRecorder {
+  /** 录音落盘目录（页面用 `context.cacheDir` 传入）；为空则只留内存。 */
+  private cacheDir: string = '';
   private capturer: audio.AudioCapturer | null = null;
   private chunks: Uint8Array[] = [];
   private total: number = 0;
   private startedAt: number = 0;
   private lastLevel: number = 0;
+
+  setCacheDir(dir: string): void {
+    this.cacheDir = dir;
+  }
 
   isRecording(): boolean {
     return this.capturer !== null;
@@ -232,8 +242,23 @@ export class DemoVoiceRecorder {
       merged.set(this.chunks[i], offset);
       offset += this.chunks[i].length;
     }
+    // 裸 PCM 播放器不认：包成 WAV 落盘，点气泡时用 AVPlayer 播放
+    let wavPath = '';
+    if (this.cacheDir.length > 0) {
+      try {
+        const wav = wavFromPcm(merged, 16000, 1);
+        const dir = `${this.cacheDir}/voice`;
+        if (!fileIo.accessSync(dir)) fileIo.mkdirSync(dir, true);
+        wavPath = `${dir}/voice-${Date.now()}.wav`;
+        const file = fileIo.openSync(wavPath, fileIo.OpenMode.READ_WRITE | fileIo.OpenMode.CREATE);
+        fileIo.writeSync(file.fd, wav.buffer as ArrayBuffer);
+        fileIo.closeSync(file);
+      } catch (error) {
+        wavPath = '';
+      }
+    }
     this.chunks = [];
-    return { bytes: merged, durationMs: duration, level: this.lastLevel };
+    return { bytes: merged, durationMs: duration, level: this.lastLevel, wavPath: wavPath };
   }
 
   /** 取消录音（丢弃内容）。 */
@@ -261,6 +286,74 @@ export class DemoVoiceRecorder {
       capturer.release();
     } catch (error) {
       // 忽略
+    }
+  }
+}
+
+/**
+ * 语音播放（demo 用）：用 `@kit.MediaKit` 的 AVPlayer 播沙箱里的 WAV。
+ * 一次只播一条；再次点同一条会停止。
+ */
+export class DemoVoicePlayer {
+  private player: media.AVPlayer | null = null;
+  private file: fileIo.File | null = null;
+  private playingPath: string = '';
+
+  isPlaying(path: string): boolean {
+    return path.length > 0 && this.playingPath === path;
+  }
+
+  currentPath(): string {
+    return this.playingPath;
+  }
+
+  /** 播放；`onDone` 在播完/停止后回调（页面据此复位按钮状态）。 */
+  async play(path: string, onDone: () => void): Promise<boolean> {
+    if (path.length === 0) return false;
+    if (this.playingPath === path) {
+      await this.stop();
+      onDone();
+      return false;
+    }
+    await this.stop();
+    try {
+      const player = await media.createAVPlayer();
+      this.player = player;
+      this.file = fileIo.openSync(path, fileIo.OpenMode.READ_ONLY);
+      const fd = this.file.fd;
+      this.playingPath = path;
+      player.on('stateChange', (state: media.AVPlayerState) => {
+        if (state === 'initialized') {
+          player.prepare();
+        } else if (state === 'prepared') {
+          player.play();
+        } else if (state === 'completed') {
+          this.stop().then(() => onDone());
+        } else if (state === 'error') {
+          this.stop().then(() => onDone());
+        }
+      });
+      player.fdSrc = { fd: fd, offset: 0, length: fileIo.statSync(fd).size };
+      return true;
+    } catch (error) {
+      await this.stop();
+      onDone();
+      return false;
+    }
+  }
+
+  /** 停止并释放（页面销毁时也要调用）。 */
+  async stop(): Promise<void> {
+    const player = this.player;
+    const file = this.file;
+    this.player = null;
+    this.file = null;
+    this.playingPath = '';
+    if (player !== null) {
+      try { player.release(); } catch (error) { /* 忽略 */ }
+    }
+    if (file !== null) {
+      try { fileIo.closeSync(file); } catch (error) { /* 忽略 */ }
     }
   }
 }

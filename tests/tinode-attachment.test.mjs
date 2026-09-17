@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
   DEFAULT_ATTACHMENT_CHUNK_BYTES, attachmentDrafty, attachmentKindOf, attachmentOfDrafty, cacheBytesOf,
   cacheKeyOf, draftyEntityTypeOf, initialProgress, isUploadComplete, mergeChunkProgress, planChunks,
-  planEviction, progressPercent, uploadedBytesOf, validateAttachment
+  planEviction, progressPercent, uploadedBytesOf, validateAttachment, wavDurationMsOf, wavFromPcm
 } from '../src/TinodeAttachment.ts';
 
 // P2：附件模块纯逻辑（校验 / 分块 / 进度 / 缓存 / Drafty 互转）
@@ -93,4 +93,30 @@ test('缓存键与 LRU 淘汰规划', () => {
   assert.deepEqual(planEviction(entries, 150), ['b'], '最久未用的先删');
   assert.deepEqual(planEviction(entries, 70), ['b', 'c'], '删到预算内为止');
   assert.deepEqual(planEviction([], 100), []);
+});
+
+// 语音：PCM → WAV（44 字节 RIFF 头，可被播放器直接识别）
+test('wavFromPcm：RIFF 头字段与数据区正确', () => {
+  const pcm = new Uint8Array([1, 2, 3, 4, 5, 6, 7, 8]);      // 4 个 S16LE 采样
+  const wav = wavFromPcm(pcm, 16000, 1);
+  assert.equal(wav.length, 44 + pcm.length);
+  const text = (start, len) => String.fromCharCode(...wav.slice(start, start + len));
+  assert.equal(text(0, 4), 'RIFF');
+  assert.equal(text(8, 4), 'WAVE');
+  assert.equal(text(12, 4), 'fmt ');
+  assert.equal(text(36, 4), 'data');
+  const u32 = (offset) => wav[offset] | (wav[offset + 1] << 8) | (wav[offset + 2] << 16) | (wav[offset + 3] << 24);
+  const u16 = (offset) => wav[offset] | (wav[offset + 1] << 8);
+  assert.equal(u32(4), 36 + pcm.length, 'RIFF size');
+  assert.equal(u16(20), 1, 'PCM 格式');
+  assert.equal(u16(22), 1, '单声道');
+  assert.equal(u32(24), 16000, '采样率');
+  assert.equal(u32(28), 32000, 'byteRate = 采样率×声道×2');
+  assert.equal(u16(32), 2, 'block align');
+  assert.equal(u16(34), 16, '位深');
+  assert.equal(u32(40), pcm.length, 'data size');
+  assert.deepEqual([...wav.slice(44)], [...pcm], '数据区原样拷贝');
+  assert.equal(wavDurationMsOf(32000, 16000, 1), 1000);
+  assert.equal(wavDurationMsOf(0), 0);
+  assert.equal(wavFromPcm(new Uint8Array(0)).length, 44, '空音频也是合法 WAV 头');
 });

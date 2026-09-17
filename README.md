@@ -27,6 +27,8 @@ Tinode 即时通讯协议的 **HarmonyOS NEXT 客户端 SDK**（纯 ArkTS/TypeSc
 | 附件：平台 HTTP 上传/下载 | `HarmonyAttachmentHttp` | ⚠️ 未验证成功路径（真机上传回 401，需服务端 `file/u` 授权；失败会退回"仅元数据"并如实提示） |
 | 系统 picker（图片 / 文件） | `examples/harmony` 的 `demo/DemoPickers.ets` | ✅ 真机验证（选择后复制进沙箱，图片消息**在聊天里渲染缩略图**） |
 | 麦克风录音（按住说话） | `examples/harmony` 的 `DemoVoiceRecorder` + `ohos.permission.MICROPHONE` | ✅ 真机验证（授权弹窗 + 录到 PCM，例：1494 ms / 43520 B） |
+| 语音播放 | `wavFromPcm`（SDK）+ `DemoVoicePlayer`（AVPlayer） | ✅ 真机验证（点气泡播放：▶ → ⏸「正在播放语音…」 → 播放结束复位） |
+| 图片全屏预览 / 文件·位置提示 | `examples/harmony` 的气泡点击 | 🟡 已实现（图片预览点任意处关闭；文件与位置给出可读提示），未逐项截图核对 |
 | 入站帧体量守卫 + 字段类型校验 / 出站帧守卫 / 日志脱敏 | `parseServerMessage` · `maxFrameBytes` · `redactTopic` | ✅ |
 | 群组（`grp`） | — | ❌ TODO |
 | 推送（`set{deviceToken}`） | — | ❌ TODO（依赖 AGC 开通） |

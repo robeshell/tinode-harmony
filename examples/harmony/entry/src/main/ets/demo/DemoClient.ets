@@ -58,6 +58,8 @@ export interface DemoMessage {
   durationMs: number;
   /** 图片消息的**本地可渲染路径**（沙箱内）；没有就回落到 `[图片]` 文案。 */
   imageUri: string;
+  /** 语音消息的**本地可播放路径**（沙箱 WAV）；没有则点击时如实提示。 */
+  voicePath: string;
 }
 
 /** 页面展示用的一个会话。 */
@@ -111,6 +113,8 @@ export class DemoClient {
   private pendingSends: (() => void)[] = [];
   /** 附件 ref/缓存键 → 本地沙箱图片路径（发图后聊天里直接渲染缩略图）。 */
   private imagePathByRef: Map<string, string> = new Map();
+  /** 附件 ref/缓存键 → 本地沙箱语音路径（发语音后点气泡即可播放）。 */
+  private voicePathByRef: Map<string, string> = new Map();
 
   constructor(listener: DemoListener) {
     this.listener = listener;
@@ -344,11 +348,19 @@ export class DemoClient {
         this.listener.onUploadProgress(0, `语音上传失败（HTTP ${response.status}），仅发元数据`);
       }
     }
+    if (voice.wavPath.length > 0) this.voicePathByRef.set(ref, voice.wavPath);
     const drafty = attachmentDrafty(
       { name: name, mime: 'audio/wav', size: voice.bytes.length, duration: voice.durationMs },
       { ref: ref, url: url }, name);
-    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
-    this.listener.onLog(`语音已发送 ${voice.durationMs}ms / ${voice.bytes.length}B`);
+    const localId = `local-${Date.now()}`;
+    this.appendLocalAttachment(localId, this.currentTopic, name, draftySegments(drafty), 'AU',
+      voice.bytes.length, voice.durationMs, '', voice.wavPath);
+    this.whenSubscribed(() => {
+      const frameId = client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+      if (frameId.length > 0) this.pendingPub.set(frameId, localId);
+      else this.markStatus(localId, 'failed');
+    });
+    this.listener.onLog(`语音已发送 ${voice.durationMs}ms / ${voice.bytes.length}B${voice.wavPath.length > 0 ? '（已落盘可播放）' : '（未落盘）'}`);
   }
 
   /** 自己的 uid（注册/登录后才有）。 */
@@ -571,7 +583,8 @@ export class DemoClient {
       fileName: attachment === null ? '' : attachment.name,
       fileSize: attachment === null ? 0 : attachment.size,
       durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration,
-      imageUri: localImage
+      imageUri: localImage,
+      voicePath: ref.length > 0 && this.voicePathByRef.has(ref) ? this.voicePathByRef.get(ref) as string : ''
     };
     let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
@@ -611,7 +624,7 @@ export class DemoClient {
     bucket.push({
       id: localId, topic: topic, seq: -1, isMine: true, ts: now, text: text, segments: segments, kind: kind,
       showTime: false, timeText: timeLabelOf(now, now), status: status,
-      fileName: '', fileSize: 0, durationMs: 0, imageUri: ''
+      fileName: '', fileSize: 0, durationMs: 0, imageUri: '', voicePath: ''
     });
     this.statusByLocalId.set(localId, status);
     this.decorate(bucket);
@@ -620,7 +633,7 @@ export class DemoClient {
 
   /** 本地先落一条附件消息（发送中）。 */
   private appendLocalAttachment(localId: string, topic: string, text: string, segments: DraftySegment[],
-    kind: string, size: number, durationMs: number, imageUri: string): void {
+    kind: string, size: number, durationMs: number, imageUri: string, voicePath: string = ''): void {
     let bucket = this.messagesByTopic.get(topic);
     if (bucket === undefined) {
       bucket = [];
@@ -630,7 +643,8 @@ export class DemoClient {
     bucket.push({
       id: localId, topic: topic, seq: -1, isMine: true, ts: now, text: text, segments: segments, kind: kind,
       showTime: false, timeText: timeLabelOf(now, now), status: 'sending',
-      fileName: kind === 'EX' ? text : '', fileSize: size, durationMs: durationMs, imageUri: imageUri
+      fileName: kind === 'EX' ? text : '', fileSize: size, durationMs: durationMs, imageUri: imageUri,
+      voicePath: voicePath
     });
     this.statusByLocalId.set(localId, 'sending');
     this.decorate(bucket);
@@ -715,7 +729,9 @@ export class DemoClient {
       fileName: attachment === null ? '' : attachment.name,
       fileSize: attachment === null ? 0 : attachment.size,
       durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration,
-      imageUri: receivedLocalImage
+      imageUri: receivedLocalImage,
+      voicePath: receivedRef.length > 0 && this.voicePathByRef.has(receivedRef)
+        ? this.voicePathByRef.get(receivedRef) as string : ''
     };
     let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
@@ -730,6 +746,7 @@ export class DemoClient {
         if (bucket[i].seq === -1 && bucket[i].isMine && this.looksSameAsLocal(bucket[i], message)) {
           const previous = bucket[i];
           message.imageUri = message.imageUri.length > 0 ? message.imageUri : previous.imageUri;
+          message.voicePath = message.voicePath.length > 0 ? message.voicePath : previous.voicePath;
           if (message.segments.length === 0) message.segments = previous.segments;
           if (message.text.length === 0) message.text = previous.text;
           message.kind = previous.kind;

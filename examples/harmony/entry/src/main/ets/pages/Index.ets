@@ -9,7 +9,7 @@ import { DraftySegment } from '../tinode/Index.ts';
 import { DemoTheme, avatarColorOf, initialOf } from '../demo/DemoTheme';
 import { deliveryMarkOf, durationTextOf, sizeTextOf, timeLabelOf } from '../demo/DemoFormat';
 import {
-  DemoVoiceRecorder, PickedFile, RecordedVoice, ensureMicPermission, pickDocument, pickImage, readUriBytes
+  DemoVoicePlayer, DemoVoiceRecorder, PickedFile, RecordedVoice, ensureMicPermission, pickDocument, pickImage, readUriBytes
 } from '../demo/DemoPickers';
 import { loadLocalConfig, LocalTinodeConfig } from '../tinode/LocalConfig';
 
@@ -106,10 +106,14 @@ struct Index {
   @Local cacheLine: string = '';
   @Local myUid: string = '';
   private client: DemoClient | null = null;
+  @Local playingVoiceId: string = '';
+  @Local previewImage: string = '';
   private recorder: DemoVoiceRecorder = new DemoVoiceRecorder();
+  private voicePlayer: DemoVoicePlayer = new DemoVoicePlayer();
 
   aboutToAppear(): void {
     const context = this.getUIContext().getHostContext() as common.UIAbilityContext;
+    this.recorder.setCacheDir(context.cacheDir);        // 录音落盘成 WAV，才能点气泡播放
     loadLocalConfig(context).then((cfg: LocalTinodeConfig) => {
       this.wsUrl = cfg.wsUrl;
       this.apiKey = cfg.apiKey;
@@ -142,6 +146,7 @@ struct Index {
   }
 
   aboutToDisappear(): void {
+    this.voicePlayer.stop();
     this.recorder.release();
     const client = this.client;
     if (client !== null) client.disconnect();
@@ -489,6 +494,34 @@ struct Index {
 
   // ── 2 · 聊天 ───────────────────────────────────────────────────────────────
 
+  /** 点气泡：语音播放/停止、图片全屏预览、文件与位置给出可读提示。 */
+  private onBubbleTap(item: DemoMessage): void {
+    if (item.kind === 'AU') {
+      if (item.voicePath.length === 0) {
+        this.uploadNote = '这条语音没有本地文件（对端语音需要服务端文件接口，本部署返回 401）';
+        return;
+      }
+      const playing = this.voicePlayer.isPlaying(item.voicePath);
+      this.playingVoiceId = playing ? '' : item.id;
+      this.uploadNote = playing ? '已停止播放' : '正在播放语音…';
+      this.voicePlayer.play(item.voicePath, () => { this.playingVoiceId = ''; this.uploadNote = '播放结束'; });
+      return;
+    }
+    if (item.kind === 'IM' || item.kind === 'VD') {
+      if (item.imageUri.length > 0) {
+        this.previewImage = item.imageUri;
+        return;
+      }
+      this.uploadNote = '这张图没有本地副本（对端图片需要服务端文件接口，本部署返回 401）';
+      return;
+    }
+    if (item.kind === 'EX') {
+      this.uploadNote = `文件：${item.fileName.length > 0 ? item.fileName : item.text}（${sizeTextOf(item.fileSize)}）—— 示例不做打开/下载`;
+      return;
+    }
+    this.uploadNote = '';
+  }
+
   @Builder
   messageContent(item: DemoMessage) {
     Column({ space: 4 }) {
@@ -529,9 +562,14 @@ struct Index {
         }.width('100%')
       } else if (item.kind === 'AU') {
         Row({ space: 8 }) {
-          Text('🔊').fontSize(16)
+          Text(this.playingVoiceId === item.id ? '⏸' : '▶').fontSize(16)
+            .fontColor(item.isMine ? Color.White : DemoTheme.brand)
           Text(durationTextOf(item.durationMs)).fontSize(14)
             .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
+          if (item.voicePath.length === 0) {
+            Text('对端语音：无本地文件').fontSize(11)
+              .fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
+          }
         }
       } else if (item.kind === 'QQ') {
         Column({ space: 4 }) {
@@ -574,6 +612,7 @@ struct Index {
               .backgroundColor(item.isMine ? DemoTheme.bubbleMine : DemoTheme.bubblePeer)
               .borderRadius(DemoTheme.bubbleRadius)
               .border(item.isMine ? { width: 0 } : { width: 0.5, color: DemoTheme.bubbleBorder })
+              .onClick(() => this.onBubbleTap(item))
           }
           .width('100%')
           .justifyContent(item.isMine ? FlexAlign.End : FlexAlign.Start)
@@ -762,12 +801,31 @@ struct Index {
     .width('100%').height('100%').backgroundColor(DemoTheme.pageBackground)
   }
 
+  @Builder
+  imagePreview() {
+    Stack() {
+      Image(`file://${this.previewImage}`)
+        .width('100%')
+        .objectFit(ImageFit.Contain)
+      Row({ space: 10 }) {
+        Text('‹').fontSize(26).fontColor(Color.White)
+        Text('图片预览').fontSize(16).fontColor(Color.White).layoutWeight(1)
+      }
+      .width('100%').padding(16)
+      .position({ x: 0, y: 0 })
+    }
+    .width('100%').height('100%')
+    .backgroundColor('#E6000000')
+    .onClick(() => { this.previewImage = ''; })
+  }
+
   build() {
     Stack() {
       if (this.view === 0) { this.loginView() }
       else if (this.view === 1) { this.conversationView() }
       else if (this.view === 2) { this.chatView() }
       else { this.capabilityView() }
+      if (this.previewImage.length > 0) { this.imagePreview() }
     }
     .width('100%').height('100%')
   }

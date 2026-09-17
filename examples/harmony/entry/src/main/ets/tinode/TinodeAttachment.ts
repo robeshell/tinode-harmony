@@ -309,3 +309,58 @@ export function uploadedRefOf(body: string): AttachmentRef | null {
   if (value.length === 0) return null;
   return { ref: value, url: typeof url === 'string' && url.length > 0 ? url : undefined };
 }
+
+// ── 语音：PCM → WAV（可直接播放/上传） ────────────────────────────────────────
+
+/** WAV 头长度（44 字节，标准 PCM 格式）。 */
+export const WAV_HEADER_BYTES = 44;
+
+function writeAscii(bytes: Uint8Array, offset: number, text: string): void {
+  for (let i = 0; i < text.length; i++) bytes[offset + i] = text.charCodeAt(i) & 0xff;
+}
+
+function writeUint32LE(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >> 8) & 0xff;
+  bytes[offset + 2] = (value >> 16) & 0xff;
+  bytes[offset + 3] = (value >> 24) & 0xff;
+}
+
+function writeUint16LE(bytes: Uint8Array, offset: number, value: number): void {
+  bytes[offset] = value & 0xff;
+  bytes[offset + 1] = (value >> 8) & 0xff;
+}
+
+/**
+ * 把**裸 PCM**（S16LE）包成标准 WAV（44 字节 RIFF 头），得到任何播放器都能播的文件。
+ *
+ * 录音（AudioCapturer）给的是裸 PCM，直接存成 `.wav` 播放器不认，必须先加头。
+ * 纯函数：不碰文件系统，返回值可直接写盘或作为附件上传。
+ */
+export function wavFromPcm(pcm: Uint8Array, sampleRate: number = 16000, channels: number = 1): Uint8Array {
+  const dataBytes = pcm.length;
+  const header = WAV_HEADER_BYTES;
+  const out = new Uint8Array(header + dataBytes);
+  const byteRate = sampleRate * channels * 2;                 // 16 bit = 2 bytes/sample
+  writeAscii(out, 0, 'RIFF');
+  writeUint32LE(out, 4, 36 + dataBytes);
+  writeAscii(out, 8, 'WAVE');
+  writeAscii(out, 12, 'fmt ');
+  writeUint32LE(out, 16, 16);                                  // fmt chunk size
+  writeUint16LE(out, 20, 1);                                   // PCM
+  writeUint16LE(out, 22, channels);
+  writeUint32LE(out, 24, sampleRate);
+  writeUint32LE(out, 28, byteRate);
+  writeUint16LE(out, 32, channels * 2);                        // block align
+  writeUint16LE(out, 34, 16);                                  // bits per sample
+  writeAscii(out, 36, 'data');
+  writeUint32LE(out, 40, dataBytes);
+  out.set(pcm, header);
+  return out;
+}
+
+/** 采样率/声道 → WAV 时长（毫秒）；用于展示与实际播放对账。 */
+export function wavDurationMsOf(pcmBytes: number, sampleRate: number = 16000, channels: number = 1): number {
+  if (!Number.isFinite(pcmBytes) || pcmBytes <= 0 || sampleRate <= 0 || channels <= 0) return 0;
+  return Math.round((pcmBytes / (sampleRate * channels * 2)) * 1000);
+}
