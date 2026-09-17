@@ -642,10 +642,16 @@ struct Index {
   @Builder
   messageRow(item: DemoMessage) {
     Column({ space: 6 }) {
+      if (item.recalled) {
+        Text(item.isMine ? '你撤回了一条消息' : '对方撤回了一条消息')
+          .fontSize(12).fontColor(DemoTheme.textHint)
+          .width('100%').textAlign(TextAlign.Center).margin({ top: 6, bottom: 2 })
+      }
       if (item.showTime) {
         Text(item.timeText).fontSize(11).fontColor(DemoTheme.textHint)
           .width('100%').textAlign(TextAlign.Center).margin({ top: 6, bottom: 2 })
       }
+      if (!item.recalled) {
       Row({ space: 8 }) {
         if (!item.isMine) {
           this.avatar(this.peerName, item.topic, 32)
@@ -674,6 +680,7 @@ struct Index {
           }
         }.layoutWeight(1)
       }.width('100%').alignItems(VerticalAlign.Top)
+      }
     }.width('100%')
   }
 
@@ -741,9 +748,10 @@ struct Index {
             this.showAttach = false;
             const client = this.clientOrNull();
             if (client !== null && this.messages.length > 0) {
+              if (this.messages.length === 0) { this.uploadNote = '没有可撤回的消息'; return; }
               const last = this.messages[this.messages.length - 1];
-              if (last.seq > 0) client.retract(last.seq);
-              else this.uploadNote = '本地未落库的消息无法撤回';
+              client.retract(last.id, last.seq);
+              this.uploadNote = `已请求撤回：${last.seq > 0 ? `seq=${last.seq}` : '本地未发出的一条'}`;
             }
           })
       }.width('100%')

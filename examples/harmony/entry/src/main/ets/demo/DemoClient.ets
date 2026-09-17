@@ -71,6 +71,8 @@ export interface DemoMessage {
   placeLabel: string;
   placeLat: number;
   placeLng: number;
+  /** 是否已撤回（撤回后只显示一条居中提示，不再显示气泡）。 */
+  recalled: boolean;
 }
 
 /** 页面展示用的一个会话。 */
@@ -122,6 +124,8 @@ export class DemoClient {
   private statusByLocalId: Map<string, string> = new Map();
   /** 订阅完成前排队等待发送的动作。 */
   private pendingSends: (() => void)[] = [];
+  /** 在途的撤回请求：报文 id → `topic|seq`（4xx 时回滚本地标记）。 */
+  private pendingDel: Map<string, string> = new Map();
   /** 附件 ref/缓存键 → 本地沙箱图片路径（发图后聊天里直接渲染缩略图）。 */
   private imagePathByRef: Map<string, string> = new Map();
   /** 附件 ref/缓存键 → 本地沙箱语音路径（发语音后点气泡即可播放）。 */
@@ -167,6 +171,7 @@ export class DemoClient {
           this.pendingPub.delete(frameId);
           this.markStatus(localId, 'failed');
         }
+        this.onDelResult(frameId, ctrl.code);
         this.listener.onLog(`ctrl code=${ctrl.code}`);
       },
       onFailure: (text: string) => this.listener.onState('failed', text),
@@ -501,13 +506,78 @@ export class DemoClient {
     if (client !== null && this.currentTopic.length > 0) client.setTyping(this.currentTopic);
   }
 
-  retract(seq: number): void {
+  /**
+   * 撤回一条消息（最后一列）：本地立刻显示「你撤回了一条消息」，同时发 `del{what:"msg"}`；
+   * 服务端拒绝（4xx）时把本地标记回滚并给出提示 —— 之前只发报文、不改本地，所以点了"没反应"。
+   */
+  retract(messageId: string, seq: number): void {
+    this.listener.onLog(`撤回请求：id=${messageId} seq=${seq} topic=${this.currentTopic}`);
     const client = this.tinode;
-    if (client !== null && this.currentTopic.length > 0) {
-      const range: DelRange = { low: seq };
-      client.deleteMessages(this.currentTopic, [range], false);
-      this.listener.onLog(`撤回/删除 seq=${seq}`);
+    if (client === null || this.currentTopic.length === 0) {
+      this.listener.onLog('撤回失败：未连接或没有会话');
+      return;
     }
+    const topic = this.currentTopic;
+    let bucket = this.messagesByTopic.get(topic);
+    if (bucket === undefined) return;
+    let target: DemoMessage | null = null;
+    const localOnly: DemoMessage[] = [];
+    for (let i = 0; i < bucket.length; i++) {
+      if (bucket[i].id === messageId) target = bucket[i];
+      if (bucket[i].seq === -1 && bucket[i].isMine) localOnly.push(bucket[i]);
+    }
+    // 本地还没落库的（seq=-1）：直接从列表里去掉即可，服务端从没收到过
+    if (target !== null && target.seq === -1) {
+      for (let i = 0; i < bucket.length; i++) {
+        if (bucket[i].id === messageId) {
+          bucket.splice(i, 1);
+          break;
+        }
+      }
+      this.listener.onMessages(bucket.slice());
+      this.listener.onLog('已移除本地未发出的消息');
+      return;
+    }
+    if (seq <= 0) return;
+    let changed = false;
+    for (let i = 0; i < bucket.length; i++) {
+      if (bucket[i].seq === seq) {
+        bucket[i].recalled = true;
+        changed = true;
+      }
+    }
+    if (changed) this.listener.onMessages(bucket.slice());
+    const range: DelRange = { low: seq };
+    const frameId = client.deleteMessages(topic, [range], false);
+    if (frameId.length > 0) {
+      this.pendingDel.set(frameId, `${topic}|${seq}`);
+      this.listener.onLog(`撤回 seq=${seq}（已发 del 报文）`);
+    } else {
+      // 没发出去 → 回滚本地标记
+      for (let i = 0; i < bucket.length; i++) {
+        if (bucket[i].seq === seq) bucket[i].recalled = false;
+      }
+      this.listener.onMessages(bucket.slice());
+      this.listener.onLog('撤回失败：连接未就绪');
+    }
+  }
+
+  /** 服务端对 `del` 的应答：4xx 时回滚"已撤回"标记。 */
+  private onDelResult(frameId: string, code: number): void {
+    const key = this.pendingDel.get(frameId);
+    if (key === undefined) return;
+    this.pendingDel.delete(frameId);
+    if (code >= 200 && code < 300) return;
+    const parts = key.split('|');
+    const topic = parts[0];
+    const seq = Number.parseInt(parts[1]);
+    const bucket = this.messagesByTopic.get(topic);
+    if (bucket === undefined) return;
+    for (let i = 0; i < bucket.length; i++) {
+      if (bucket[i].seq === seq) bucket[i].recalled = false;
+    }
+    if (topic === this.currentTopic) this.listener.onMessages(bucket.slice());
+    this.listener.onLog(`撤回被拒绝（code=${code}）：可能没有删除权限`);
   }
 
   accessOf(topic: string): string {
@@ -646,7 +716,8 @@ export class DemoClient {
       voicePath: ref.length > 0 && this.voicePathByRef.has(ref) ? this.voicePathByRef.get(ref) as string : '',
       placeLabel: place === null ? '' : place.label,
       placeLat: place === null ? 0 : place.lat,
-      placeLng: place === null ? 0 : place.lng
+      placeLng: place === null ? 0 : place.lng,
+      recalled: false
     };
     let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
@@ -656,6 +727,7 @@ export class DemoClient {
     let replaced = false;
     for (let i = 0; i < bucket.length; i++) {
       if (bucket[i].id === item.id) {
+        item.recalled = item.recalled || bucket[i].recalled;   // 撤回标记不能被落库回调抹掉
         bucket[i] = item;
         replaced = true;
       }
@@ -687,7 +759,7 @@ export class DemoClient {
       id: localId, topic: topic, seq: -1, isMine: true, ts: now, text: text, segments: segments, kind: kind,
       showTime: false, timeText: timeLabelOf(now, now), status: status,
       fileName: '', fileSize: 0, durationMs: 0, imageUri: '', voicePath: '',
-      placeLabel: '', placeLat: 0, placeLng: 0
+      placeLabel: '', placeLat: 0, placeLng: 0, recalled: false
     });
     this.statusByLocalId.set(localId, status);
     this.decorate(bucket);
@@ -709,7 +781,8 @@ export class DemoClient {
       showTime: false, timeText: timeLabelOf(now, now), status: 'sending',
       fileName: kind === 'EX' ? text : '', fileSize: size, durationMs: durationMs, imageUri: imageUri,
       voicePath: voicePath,
-      placeLabel: kind === 'LN' ? text : '', placeLat: kind === 'LN' ? placeLat : 0, placeLng: kind === 'LN' ? placeLng : 0
+      placeLabel: kind === 'LN' ? text : '', placeLat: kind === 'LN' ? placeLat : 0, placeLng: kind === 'LN' ? placeLng : 0,
+      recalled: false
     });
     this.statusByLocalId.set(localId, 'sending');
     this.decorate(bucket);
@@ -800,7 +873,8 @@ export class DemoClient {
         ? this.voicePathByRef.get(receivedRef) as string : '',
       placeLabel: placeInfo === null ? '' : placeInfo.label,
       placeLat: placeInfo === null ? 0 : placeInfo.lat,
-      placeLng: placeInfo === null ? 0 : placeInfo.lng
+      placeLng: placeInfo === null ? 0 : placeInfo.lng,
+      recalled: false
     };
     let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
@@ -820,6 +894,7 @@ export class DemoClient {
           message.placeLabel = message.placeLabel.length > 0 ? message.placeLabel : previous.placeLabel;
           message.placeLat = message.placeLat !== 0 ? message.placeLat : previous.placeLat;
           message.placeLng = message.placeLng !== 0 ? message.placeLng : previous.placeLng;
+          message.recalled = message.recalled || previous.recalled;
           if (message.segments.length === 0) message.segments = previous.segments;
           if (message.text.length === 0) message.text = previous.text;
           message.kind = previous.kind;
@@ -834,6 +909,9 @@ export class DemoClient {
           break;
         }
       }
+    }
+    for (let i = 0; i < bucket.length; i++) {
+      if (bucket[i].seq === message.seq) message.recalled = message.recalled || bucket[i].recalled;
     }
     bucket.push(message);
     this.decorate(bucket);
