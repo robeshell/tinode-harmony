@@ -15,6 +15,7 @@
 | `history(topic, beforeSeq, limit)` | 报文 id / `''` | 分页拉历史（服务端可能 403） |
 | `deleteTopic(topic)` / `deleteMessages(topic, ranges, hard)` | 报文 id / `''` | — |
 | `setRead(topic, seq)` / `setTyping(topic)` / `leave(topic)` | **`boolean`（是否已发出）** | note/leave 协议里没有 id，故不进 id 口径 |
+| `knownTopics()` / `topicState(topic)` | `TinodeTopicState[]` / `TinodeTopicState \| null` | **P1**：订阅意图 + 位点（`lastSeq`/`read`/`recv`）快照 |
 | `conversations()` / `messagesOf(topic, limit, beforeSeq)` / `draftOf(topic)` | `Promise<…>` | 存储端口包装 |
 | `upsertTopic/saveDraft/clearHistory/removeTopic` | `Promise<void>` | 同上 |
 
@@ -28,6 +29,8 @@
 | `sendPub(topic, head, content)` / `sendPubWithId(id, topic, head, content)` | `void`（超限不发 → `onFailure`） |
 | `loadHistoryWithId(topic, before, limit)` / `deleteTopic` / `deleteMessages` | 报文 id |
 | `markRead(topic, seq)` / `sendTyping(topic)` / `leave(topic)` | `boolean` |
+| `knownTopics()` / `topicState(topic)` | 主题快照（P1） |
+| `setAutoResubscribe(on)` / `setSyncHistoryOnReconnect(on)` | `void`（默认都开） |
 
 ## 平台传输 `TinodeSocket`
 

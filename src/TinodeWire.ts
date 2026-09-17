@@ -139,6 +139,16 @@ export function buildGetHistory(id: string, topic: string, before: number, limit
   });
 }
 
+/**
+ * `get{what:"data", data:{since, limit}}`：从某个位点**向后**补历史（断线重连用）。
+ * 与 `buildGetHistory`（`before`）二选一：前者补缺口，后者翻旧账。
+ */
+export function buildGetHistorySince(id: string, topic: string, since: number, limit: number): string {
+  return JSON.stringify({
+    get: { id: id, topic: topic, what: 'data', data: { since: since, limit: limit } }
+  });
+}
+
 /** `pub`：发消息（`MsgClientPub{id,topic,noecho,head,content}`）；`head` 与 `content` 都可能为空。 */
 export function buildPub(id: string, topic: string, head: ImHead | null, content: Drafty | null): string {
   const pub: ImPubBody = { id: id, topic: topic };

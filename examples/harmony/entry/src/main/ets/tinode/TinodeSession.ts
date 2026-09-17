@@ -27,13 +27,15 @@
 import {
   IM_PROBE_PAYLOAD,
   backoffDelayMs, buildDelMessages, buildDelTopic, buildGetHistory, buildHi, buildLeave, buildLogin,
-  buildNoteKeyPress, buildNoteRead, buildPub, buildSub, ctrlFailureText, ctrlIsFatal, ctrlOk,
+  buildGetHistorySince, buildNoteKeyPress, buildNoteRead, buildPub, buildSub, ctrlFailureText, ctrlIsFatal, ctrlOk,
   parseServerMessage, parseWsEndpoint
 } from './TinodeWire.ts';
 import type {
   DelRange, ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, ImServerMessage, ImWsEndpoint
 } from './TinodeWire.ts';
 import { DEFAULT_MAX_FRAME_BYTES, DEFAULT_MAX_INBOUND_BYTES } from './TinodeWire.ts';
+import { TinodeTopics } from './TinodeTopics.ts';
+import type { TinodeTopicState } from './TinodeTopics.ts';
 import { redactTopic, tinodeLogDetail } from './TinodeLog.ts';
 import type { Drafty } from './Drafty.ts';
 import type { ImHead } from './TinodeHead.ts';
@@ -85,6 +87,13 @@ export interface ImSessionConfig {
   maxBackoffMs: number;
   /** 帧体量上限（字节）：出站 publish 守卫 + 入站解析守卫（不传用 wire 的默认值）。 */
   maxFrameBytes?: number;
+  /**
+   * 连上并登录后，是否由 SDK **自动重新订阅**登记过的主题（默认 true）。
+   * 宿主自己管订阅时置 false（我们自己的 App 就是自己管）。
+   */
+  autoResubscribe?: boolean;
+  /** 重连后是否从各主题的 `lastSeq+1` 补历史（默认 true；宿主自己做增量同步时置 false）。 */
+  syncHistoryOnReconnect?: boolean;
   /** 心跳间隔；0 = 关（默认，见文件头注释）。 */
   heartbeatMs: number;
   /** 抖动来源；测试注入确定值。 */
@@ -128,6 +137,8 @@ export interface ImSessionHooks {
   onFailure: (text: string) => void;
   /** hi 应答里的服务端版本（Android 存进 mServerVersion/Build）。 */
   onServerVersion: (ver: string, build: string) => void;
+  /** 主题状态变化（订阅结果 / 位点推进）。**可选**：不关心就不实现。 */
+  onTopicState?: (state: TinodeTopicState) => void;
 }
 
 /**
@@ -151,6 +162,10 @@ export class ImSession {
   private failureHandled: boolean = false;
   /** 最近一次进入 `ready` 的时刻（**审计 P1-1**：抖动式断线要保留退避，长期稳定后再清零）。 */
   private readyAtMs: number = 0;
+  /** 主题登记（P1：订阅意图 + 位点 + 缺口）。 */
+  private topics: TinodeTopics = new TinodeTopics();
+  /** 在途的订阅请求：报文 id → topic（收到 ctrl 后据此标记订阅成功/失败）。 */
+  private subRequests: Map<string, string> = new Map();
   private retryAtMs: number = 0;
   private deadlineMs: number = 0;
   private lastProbeMs: number = 0;
@@ -324,6 +339,9 @@ export class ImSession {
     // 抖动保护（审计 P1-1）：连上后没撑住稳定窗口就再断 → 保留退避计数，避免重连风暴；
     // 稳定撑过窗口后清零，避免"一次成功后永久按旧 attempt 退避"。
     if (this.readyAtMs > 0 && nowMs - this.readyAtMs >= STABLE_CONNECTION_MS) this.attempt = 0;
+    // P1：wire 上的订阅随连接一起没了 → 清标记（保留订阅意图与位点，重连后自动重订 + 补历史）。
+    this.topics.resetSubscriptions();
+    this.subRequests.clear();
     try {
       this.transport.close();
     } catch (_) {
@@ -350,6 +368,7 @@ export class ImSession {
     }
     const data = message.data;
     if (data !== undefined) {
+      if (this.topics.observeData(data.topic, data.seq, nowMs)) this.emitTopicState(data.topic);
       this.hooks.onData(data);
       return;
     }
@@ -364,7 +383,13 @@ export class ImSession {
       this.hooks.onPres(pres);
     }
     const note = message.note;
-    if (note !== undefined) this.hooks.onNote(note);
+    if (note !== undefined) {
+      const what = note.what === undefined ? '' : note.what;
+      if (this.topics.observeNote(what, note.topic, note.seq, nowMs) && note.topic !== undefined) {
+        this.emitTopicState(note.topic);
+      }
+      this.hooks.onNote(note);
+    }
     const meta = message.meta;
     if (meta !== undefined) this.hooks.onMeta(meta);
     // 到不了这里：五类键在 parseServerMessage 里已经过滤过。
@@ -410,7 +435,17 @@ export class ImSession {
       this.readyAtMs = nowMs;
       this.failureHandled = false;
       this.setState('ready');
+      // P1：连上并登录后自动把登记过的主题重新订回来（可关），需要时从 lastSeq 补历史。
+      this.resubscribeAll();
       return;
+    }
+    // 订阅应答：按报文 id 归因，标记该主题订阅成功/失败（P1）。
+    const subId = ctrl.id === undefined ? '' : ctrl.id;
+    const subTopic = this.subRequests.get(subId);
+    if (subTopic !== undefined) {
+      this.subRequests.delete(subId);
+      this.topics.markSubscribed(subTopic, ctrlOk(ctrl.code), Date.now());
+      this.emitTopicState(subTopic);
     }
     // ready 之后的 ctrl：属于「某个具体请求」的应答，交给上层按 id 对应（如 pub 的 seq）。
     tinodeLogDetail('im/ctrl', `id=${ctrl.id === undefined ? '' : ctrl.id} code=${ctrl.code} `
@@ -419,6 +454,50 @@ export class ImSession {
     if (!ctrlOk(ctrl.code) && ctrlIsFatal(ctrl.code)) {
       this.fail(ctrlFailureText(ctrl.code, ctrl.text === undefined ? '' : ctrl.text));
     }
+  }
+
+  /**
+   * P1：连上后把登记过的主题重新订阅回来，并（可选）从 `lastSeq+1` 补历史。
+   * 首次连接时登记表通常还是空的，所以不会发无用报文；只有"订阅过又断线"才真正用到。
+   */
+  private resubscribeAll(): void {
+    if (this.config.autoResubscribe !== false) {
+      const pending = this.topics.needingSubscribe();
+      for (let i = 0; i < pending.length; i++) {
+        const state = pending[i];
+        const id = this.takeId();
+        this.subRequests.set(id, state.topic);
+        this.transport.send(buildSub(id, state.topic, state.prefs.withDesc, state.prefs.withSub, state.prefs.limit));
+        tinodeLogDetail('im/sub', `resubscribe topic=${redactTopic(state.topic)} id=${id}`, 'info');
+      }
+    }
+    if (this.config.syncHistoryOnReconnect === false) return;
+    const gaps = this.topics.gaps();
+    for (let i = 0; i < gaps.length; i++) {
+      const gap = gaps[i];
+      const state = this.topics.stateOf(gap.topic);
+      const limit = state === null ? 24 : state.prefs.limit;
+      this.transport.send(buildGetHistorySince(this.takeId(), gap.topic, gap.since, limit));
+      tinodeLogDetail('im/history', `sync topic=${redactTopic(gap.topic)} since=${gap.since}`, 'info');
+    }
+  }
+
+  /** 主题状态变化时回调宿主（可选 hook）。 */
+  private emitTopicState(topic: string): void {
+    const emit = this.hooks.onTopicState;
+    if (emit === undefined) return;
+    const state = this.topics.stateOf(topic);
+    if (state !== null) emit(state);
+  }
+
+  /** 登记过的主题快照（P1：宿主可据此渲染会话列表/未读）。 */
+  knownTopics(): TinodeTopicState[] {
+    return this.topics.known();
+  }
+
+  /** 单个主题的状态快照；没登记过返回 null。 */
+  topicState(topic: string): TinodeTopicState | null {
+    return this.topics.stateOf(topic);
   }
 
   private failHandshake(ctrl: ImCtrl, nowMs: number): void {
@@ -449,6 +528,8 @@ export class ImSession {
   subscribeTracked(topic: string, withDesc: boolean, withSub: boolean, limit: number): string {
     if (this.currentState !== 'ready') return '';
     const id = this.takeId();
+    this.subRequests.set(id, topic);
+    this.topics.remember(topic, withDesc, withSub, limit, Date.now());
     this.transport.send(buildSub(id, topic, withDesc, withSub, limit));
     return id;
   }
@@ -489,6 +570,16 @@ export class ImSession {
    * note 类报文（`read`/`kp`）的统一出口。**协议里 note 没有 id**，所以这类方法统一返回
    * `boolean`（是否已发出），而不是像 `publish` 那样返回报文 id —— 这是审计 P1-8 的统一口径。
    */
+  /** 开关：连上后自动重订阅（默认开）。 */
+  setAutoResubscribe(enabled: boolean): void {
+    this.config.autoResubscribe = enabled;
+  }
+
+  /** 开关：重连后从 lastSeq 补历史（默认开）。 */
+  setSyncHistoryOnReconnect(enabled: boolean): void {
+    this.config.syncHistoryOnReconnect = enabled;
+  }
+
   private sendNote(frame: string): boolean {
     if (this.currentState !== 'ready') return false;
     this.transport.send(frame);
@@ -522,7 +613,9 @@ export class ImSession {
   /** 标记已读。 */
 
   markRead(topic: string, seq: number): boolean {
-    return this.sendNote(buildNoteRead(topic, seq));
+    const sent = this.sendNote(buildNoteRead(topic, seq));
+    if (sent && this.topics.markRead(topic, seq, Date.now())) this.emitTopicState(topic);
+    return sent;
   }
 
   /** 正在输入（节流交给调用方，Android 是 2 s，见 docs/22 §1.10）。 */
@@ -534,6 +627,7 @@ export class ImSession {
   leave(topic: string): boolean {
     if (this.currentState !== 'ready') return false;
     this.transport.send(buildLeave(this.takeId(), topic));
+    this.topics.forget(topic);
     return true;
   }
 }

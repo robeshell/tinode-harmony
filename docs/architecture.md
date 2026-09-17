@@ -32,6 +32,22 @@ idle ──start()/tick()──▶ connecting ──onOpen──▶ handshake �
   连接**稳定 ≥5s** 后再断线才清零 attempt（避免弱网抖动导致重连风暴）；
 - **断线只算一次**：平台层 `error` + `close` 双回调会被幂等处理。
 
+## 主题生命周期（P1）
+
+`TinodeTopics`（纯逻辑）在 SDK 内保存"我关注哪些会话、每个会话到哪了"：
+
+```
+subscribe(sub) ──► remember(订阅意图 withDesc/withSub/limit)
+ctrl 2xx       ──► markSubscribed(topic, true)         ← 收到应答才算订阅成功
+data.seq       ──► lastSeq = max(见过的 seq)
+note read/recv ──► read / recv 位点（本端 markRead 同口径）
+断线           ──► resetSubscriptions()（保留意图与位点）
+重连 ready     ──► 自动重新订阅 needingSubscribe() + 从 gaps()（lastSeq+1）补历史
+```
+
+宿主可读 `knownTopics()` / `topicState(topic)`，或订阅 `onTopicState` 回调（订阅结果与位点推进时触发）。
+不想让 SDK 管这些的宿主：`autoResubscribe: false`（只重连不重订）与 `syncHistoryOnReconnect: false`（不补历史）。
+
 ## 三个端口
 
 | 端口 | 接口 | 默认实现 | 你要做什么 |

@@ -380,3 +380,47 @@ test('稳定窗口后断线：退避计数清零', () => {
   h.tick(30 + 6000 + 2500);
   assert.equal(h.session.state(), 'connecting', '按最小退避重连（而不是 maxBackoffMs 的 60s）');
 });
+
+// P1：连上并登录后自动重订阅登记过的主题（可关），并可从 lastSeq 补历史
+test('重连后自动重订阅 + 从 lastSeq 补历史', () => {
+  const h = harness();
+  h.start(0);
+  loginThrough(h, 'usrA', 10);
+  assert.equal(h.session.state(), 'ready');
+  // 先订阅一次并标记成功，再收到两条消息（lastSeq=2）
+  const subId = h.session.subscribeTracked('usrA', true, true, 24);
+  h.transport.fireMessage({ ctrl: { id: subId, code: IM_CODE_OK } }, 20);
+  h.transport.fireMessage({ data: { topic: 'usrA', seq: 1, content: { txt: 'a' } } }, 30);
+  h.transport.fireMessage({ data: { topic: 'usrA', seq: 2, content: { txt: 'b' } } }, 40);
+  assert.equal(h.session.topicState('usrA').lastSeq, 2);
+  assert.equal(h.session.knownTopics().length, 1);
+  // 断线 → 重连 → 自动重订阅 + 补历史
+  h.transport.fireClose(1000);
+  h.tick(1000 + 2500);
+  h.transport.fireOpen(3000);
+  h.transport.fireMessage({ ctrl: { id: '1', code: IM_CODE_OK, params: { ver: '0.25' } } }, 3010);
+  h.transport.fireMessage({ ctrl: { id: '2', code: IM_CODE_OK, params: { user: 'usrA' } } }, 3020);
+  assert.equal(h.session.state(), 'ready');
+  const frames = h.transport.sent.map((f) => JSON.parse(f));
+  const resub = frames.filter((f) => f.sub !== undefined && f.sub.topic === 'usrA');
+  const sync = frames.filter((f) => f.get !== undefined && f.get.data !== undefined && f.get.data.since !== undefined);
+  assert.ok(resub.length >= 2, '断线后应再发一次 sub');
+  assert.equal(sync.length, 1, '应发一次 since 补历史');
+  assert.equal(sync[0].get.data.since, 3, '从 lastSeq+1 开始补');
+});
+
+test('autoResubscribe=false 时不自动订阅', () => {
+  const h = harness({ autoResubscribe: false });
+  h.start(0);
+  loginThrough(h, 'usrA', 10);
+  const subId = h.session.subscribeTracked('usrA', true, true, 24);
+  h.transport.fireMessage({ ctrl: { id: subId, code: IM_CODE_OK } }, 20);
+  h.transport.fireMessage({ data: { topic: 'usrA', seq: 5 } }, 30);
+  h.transport.fireClose(1000);
+  h.tick(1000 + 2500);
+  h.transport.fireOpen(3000);
+  h.transport.fireMessage({ ctrl: { id: '1', code: IM_CODE_OK, params: { ver: '0.25' } } }, 3010);
+  h.transport.fireMessage({ ctrl: { id: '2', code: IM_CODE_OK, params: { user: 'usrA' } } }, 3020);
+  const frames = h.transport.sent.map((f) => JSON.parse(f));
+  assert.equal(frames.filter((f) => f.sub !== undefined && f.sub.topic === 'usrA').length, 1, '只有最初那一次 sub');
+});

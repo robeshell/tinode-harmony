@@ -16,6 +16,7 @@
  */
 import type { ImHead } from './TinodeHead.ts';
 import type { Drafty } from './Drafty.ts';
+import type { TinodeTopicState } from './TinodeTopics.ts';
 import { ImSession, defaultSessionConfig } from './TinodeSession.ts';
 import type { ImSessionConfig, ImSessionState, ImTransport } from './TinodeSession.ts';
 import type { ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, DelRange } from './TinodeWire.ts';
@@ -54,6 +55,8 @@ export interface TinodeHooks {
   onFailure?: (text: string) => void;
   /** 服务端版本（`hi` 的 `ver`）。 */
   onServerVersion?: (version: string) => void;
+  /** 主题状态变化（订阅结果 / 位点推进）——P1 新增，可选。 */
+  onTopicState?: (state: TinodeTopicState) => void;
 }
 
 /** 构造门面的参数。 */
@@ -67,6 +70,10 @@ export interface TinodeOptions {
    * 超限的 `publish` **不发出去**，按 `onFailure` 报错并返回空串（审计 P0-2）。
    */
   maxFrameBytes?: number;
+  /** 连上后由 SDK 自动重新订阅登记过的主题（默认 true，见 `ImSessionConfig.autoResubscribe`）。 */
+  autoResubscribe?: boolean;
+  /** 重连后从各主题 `lastSeq+1` 补历史（默认 true，见 `ImSessionConfig.syncHistoryOnReconnect`）。 */
+  syncHistoryOnReconnect?: boolean;
   /**
    * 是否由门面把收到的消息落库（默认 **true**，外部宿主开箱即用）。
    * 宿主自己有消息管线（本地 echo/送达状态/未读/列表刷新）时置 **false**，改用 `hooks.onRawData` 接管。
@@ -129,8 +136,18 @@ export class Tinode {
         tinodeLogDetail('tinode', `server ${version}`, 'info');
         const done = this.hooks.onServerVersion;
         if (done !== undefined) done(version);
-      }
+      },
+      onTopicState: options.hooks === undefined || options.hooks.onTopicState === undefined
+        ? undefined : (state: TinodeTopicState) => {
+          const done = options.hooks === undefined ? undefined : options.hooks.onTopicState;
+          if (done !== undefined) done(state);
+        }
     });
+    // P1：主题生命周期开关（默认都开）。想自己管订阅/增量同步的宿主可显式关掉。
+    if (options.autoResubscribe !== undefined) this.session.setAutoResubscribe(options.autoResubscribe);
+    if (options.syncHistoryOnReconnect !== undefined) {
+      this.session.setSyncHistoryOnReconnect(options.syncHistoryOnReconnect);
+    }
   }
 
   /** 用默认配置 + 内置 WebSocket 的便捷构造（`Socket` 由 `.ets` 侧提供时才有）。 */
@@ -148,6 +165,12 @@ export class Tinode {
   start(nowMs: number): void { this.session.start(nowMs); }
   tick(nowMs: number): void { this.session.tick(nowMs); }
   stop(): void { this.session.stop(); }
+  /** P1：登记过的主题快照（宿主可据此渲染会话列表/未读，最近活动的在前）。 */
+  knownTopics(): TinodeTopicState[] { return this.session.knownTopics(); }
+
+  /** P1：单个主题的状态快照（订阅结果 / lastSeq / read / recv）；没登记过返回 null。 */
+  topicState(topic: string): TinodeTopicState | null { return this.session.topicState(topic); }
+
   state(): ImSessionState { return this.session.state(); }
   ready(): boolean { return this.session.ready(); }
   myUid(): string { return this.session.myUid(); }

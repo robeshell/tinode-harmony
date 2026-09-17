@@ -21,6 +21,14 @@
   实现不正确的方法比没有更糟）、移除 `rawSession()`/`nextRequestId()` 这类内部方法。
 - **归属声明**：新增 `NOTICE`，逐文件补许可头。
 
+### 主题生命周期（P1）
+- 新增 `TinodeTopics`（纯逻辑）：登记每个 topic 的**订阅意图**与**位点**（`lastSeq` / `read` / `recv`）；
+- 连接 `ready` 后 SDK **自动重新订阅**登记过的主题，并（可选）从 `lastSeq+1` 补历史（`get{what:"data",data:{since,limit}}`，
+  新增 `buildGetHistorySince`）；断线时只清"本轮已订阅"标记，**保留订阅意图与位点**；
+- 新增 `Tinode.knownTopics()` / `Tinode.topicState(topic)` / `ImSession.knownTopics()/topicState()` 与可选 hook `onTopicState`；
+- 可关：`TinodeOptions.autoResubscribe`、`TinodeOptions.syncHistoryOnReconnect`（默认都开），
+  会话侧对应 `setAutoResubscribe(false)` / `setSyncHistoryOnReconnect(false)` —— 自己管订阅与增量同步的宿主可关掉。
+
 ### 日志
 - 明文 `ws://` 的提示走 **detail（level=warn）**，不再经 failure 通道（宿主不会把它渲染成"失败"）；
   真正需要拒绝明文时用 `new TinodeSocket(url, apiKey, false)`。
