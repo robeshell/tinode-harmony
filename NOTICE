@@ -1,0 +1,17 @@
+@otq/tinode-harmony
+Copyright (c) 2026 合肥迈尔睿测控（听漏仪项目）
+
+本产品包含或参考了以下第三方成果：
+
+1. Tinode 协议与官方客户端（Apache License 2.0）
+   - 上游仓库：https://github.com/tinode/chat
+   - 参考实现：android/libs/tindroid/tinodesdk（Java，包名 co.tinode.tinodesdk）
+   - 本 SDK 为**独立的 ArkTS 重写**：没有复制上游源码，但协议常量（如 X-Tinode-APIKey 头名、
+     /v0/channels 路径、默认分页 24 条）、报文形状（hi/login/sub/pub/get/set/note/del/leave）
+     与错误码语义均来自该上游与协议文档 docs/API.md，属于"参考实现"关系。
+   - 依 Apache License 2.0 第 4 条，此处保留来源与许可说明；Apache-2.0 全文见
+     https://www.apache.org/licenses/LICENSE-2.0
+
+2. 协议文档：https://github.com/tinode/chat/blob/master/docs/API.md
+
+说明：本 SDK **未使用** Tinode 服务端（tinode/chat 服务端为 GPLv3 许可）的任何源码。

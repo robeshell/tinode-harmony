@@ -1,0 +1,6 @@
+node_modules/
+oh_modules/
+build/
+*.har
+.DS_Store
+.idea/

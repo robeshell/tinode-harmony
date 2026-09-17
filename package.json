@@ -1,0 +1,11 @@
+{
+  "name": "tinode-harmony",
+  "version": "0.1.0",
+  "private": false,
+  "type": "module",
+  "description": "Tinode IM protocol client SDK for HarmonyOS NEXT (ArkTS) — wire codec, session state machine, Drafty subset, storage port.",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs"
+  }
+}
