@@ -1,5 +1,5 @@
 /**
- * @otq/tinode-harmony —— Tinode 即时通讯协议的 HarmonyOS 客户端 SDK（**纯逻辑出口**）。
+ * tinode-harmony —— Tinode 即时通讯协议的 HarmonyOS 客户端 SDK（**纯逻辑出口**）。
  *
  * 这个文件只导出 `.ts`（纯 ArkTS/TS 逻辑），因此**普通 `.ts` 文件也能安全导入**
  * （实测：`.ts` 不能从 HAR 包里导入 ArkTS；见 README「为什么是源码目录而不是 HAR」）。

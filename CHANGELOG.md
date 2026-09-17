@@ -1,6 +1,6 @@
 # Changelog
 
-本文件记录 `@otq/tinode-harmony` 的版本变更（遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本）。
+本文件记录 `tinode-harmony` 的版本变更（遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.1.0/) 与语义化版本）。
 
 ## [0.1.0] - 2026-09-17
 

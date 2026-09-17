@@ -1,5 +1,5 @@
 {
-  "name": "@otq/tinode-harmony",
+  "name": "tinode-harmony",
   "version": "0.1.0",
   "description": "Tinode IM protocol client SDK for HarmonyOS NEXT (ArkTS): wire codec, session state machine, Drafty subset, storage port.",
   "main": "Index.ets",

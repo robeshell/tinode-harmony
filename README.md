@@ -5,7 +5,7 @@ Tinode 即时通讯协议的 **HarmonyOS NEXT 客户端 SDK（ArkTS/TypeScript�
 
 - 许可：**MIT**（见 [LICENSE](./LICENSE)；第三方归属见 [NOTICE](./NOTICE)）
 - 版本：见 [VERSION](./VERSION)，变更见 [CHANGELOG.md](./CHANGELOG.md)
-- 包名：`@otq/tinode-harmony`（见 [oh-package.json5](./oh-package.json5)）
+- 包名：`tinode-harmony`（见 [oh-package.json5](./oh-package.json5)）
 - 参考实现：Tinode 官方 [协议文档](https://github.com/tinode/chat/blob/master/docs/API.md) 与
   Apache-2.0 的 `co/tinode/tinodesdk`（**本 SDK 是独立的 ArkTS 重写**，未复制其源码）
 
@@ -46,7 +46,7 @@ import { TinodeSocket } from '../tinode/Socket.ets';
 
 按 [oh-package.json5](./oh-package.json5) 建 HAR 模块（`main: Index.ets`、`hvigorfile.ts` 用 `harTasks`、
 `build-profile.json5` 的 `apiType: stageMode`、`src/main/module.json5` 的 `type: "har"`），`hvigorw assembleHar` 产出 `.har`，
-使用方在 `oh-package.json5` 里写 `"@otq/tinode-harmony": "file:../tinode-harmony"` 或 ohpm 仓库地址。
+使用方在 `oh-package.json5` 里写 `"tinode-harmony": "file:../tinode-harmony"` 或 ohpm 仓库地址。
 （本仓库把源码与测试都带齐，HAR 只是分发形态。）
 
 ## 3. 快速开始（门面，推荐）
