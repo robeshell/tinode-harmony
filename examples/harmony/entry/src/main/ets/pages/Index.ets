@@ -662,12 +662,16 @@ struct Index {
               client.sendQuote('收到', this.messages[this.messages.length - 1].seq);
             }
           })
-        Button('图片(旧路径)').layoutWeight(1).height(40).borderRadius(10)
-          .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(12)
+        Button('撤回末条').layoutWeight(1).height(40).borderRadius(10)
+          .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(13)
           .onClick(() => {
             this.showAttach = false;
             const client = this.clientOrNull();
-            if (client !== null) client.sendLocalFile('photo.jpg', 'image/jpeg', 240 * 1024);
+            if (client !== null && this.messages.length > 0) {
+              const last = this.messages[this.messages.length - 1];
+              if (last.seq > 0) client.retract(last.seq);
+              else this.uploadNote = '本地未落库的消息无法撤回';
+            }
           })
       }.width('100%')
       if (this.uploadNote.length > 0) {
