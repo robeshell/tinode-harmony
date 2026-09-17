@@ -287,7 +287,8 @@ export class DemoClient {
       });
       const parsed = uploadedRefOf(response.body);
       if (parsed === null) {
-        this.listener.onUploadProgress(0, `上传失败（HTTP ${response.status}），退回本地 ref`);
+        this.listener.onLog(`文件服务返回 HTTP ${response.status}（本示例不接文件服务）`);
+        this.listener.onUploadProgress(0, '本示例未接文件服务：图片仅本机可见');
         ref = cacheKeyOf(file.uri, file.mime);
       } else {
         ref = parsed.ref;
@@ -296,7 +297,9 @@ export class DemoClient {
       }
     } else {
       ref = cacheKeyOf(file.uri, file.mime);
-      this.listener.onUploadProgress(100, bytes === null ? `${file.name}：内容过大未读取，仅发元数据` : `${file.name}：未配置上传地址，仅发本地 ref`);
+      this.listener.onUploadProgress(100, bytes === null
+        ? `${file.name}：内容过大，未读取（仅发消息）`
+        : '本示例未接文件服务：附件仅本机可见');
     }
     // 图片：记住"ref → 本地沙箱路径"，聊天里直接渲染缩略图（服务端 401 时也能显示自己发的图）
     const isImage = file.mime.startsWith('image/');
@@ -345,7 +348,8 @@ export class DemoClient {
         ref = parsed.ref;
         url = parsed.url;
       } else {
-        this.listener.onUploadProgress(0, `语音上传失败（HTTP ${response.status}），仅发元数据`);
+        this.listener.onLog(`文件服务返回 HTTP ${response.status}（本示例不接文件服务）`);
+        this.listener.onUploadProgress(0, '本示例未接文件服务：语音仅本机可播');
       }
     }
     if (voice.wavPath.length > 0) this.voicePathByRef.set(ref, voice.wavPath);

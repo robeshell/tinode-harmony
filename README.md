@@ -24,7 +24,7 @@ Tinode 即时通讯协议的 **HarmonyOS NEXT 客户端 SDK**（纯 ArkTS/TypeSc
 | 去重合并 / 未读 / 会话摘要 / 容量淘汰 / 草稿预览 | `mergeMessages` · `unreadOf` · `conversationSummaryOf` · `planMessageEviction` | ✅ |
 | 富文本 Drafty：读侧、写侧（样式/实体/插入删除位移）、渲染片段 | `parseDraftyJson` · `draftyWithStyle` · `draftyInsert` · `draftySegments` | ✅ |
 | 附件：校验 / 分块 / 进度 / 缓存键 / LRU 淘汰 | `validateAttachment` · `planChunks` · `planEviction` | ✅ |
-| 附件：平台 HTTP 上传/下载 | `HarmonyAttachmentHttp` | ⚠️ 未验证成功路径（真机上传回 401，需服务端 `file/u` 授权；失败会退回"仅元数据"并如实提示） |
+| 附件：平台 HTTP 上传/下载 | `HarmonyAttachmentHttp` | ⚠️ **本示例不接文件服务**：附件（图片/语音/文件）**仅本机演示**（可见 / 可播 / 可预览），不同步给对端；该实现未验证成功路径 |
 | 系统 picker（图片 / 文件） | `examples/harmony` 的 `demo/DemoPickers.ets` | ✅ 真机验证（选择后复制进沙箱，图片消息**在聊天里渲染缩略图**） |
 | 麦克风录音（按住说话） | `examples/harmony` 的 `DemoVoiceRecorder` + `ohos.permission.MICROPHONE` | ✅ 真机验证（授权弹窗 + 录到 PCM，例：1494 ms / 43520 B） |
 | 语音播放 | `wavFromPcm`（SDK）+ `DemoVoicePlayer`（AVPlayer） | ✅ 真机验证（点气泡播放：▶ → ⏸「正在播放语音…」 → 播放结束复位） |

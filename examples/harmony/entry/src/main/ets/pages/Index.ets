@@ -498,7 +498,7 @@ struct Index {
   private onBubbleTap(item: DemoMessage): void {
     if (item.kind === 'AU') {
       if (item.voicePath.length === 0) {
-        this.uploadNote = '这条语音没有本地文件（对端语音需要服务端文件接口，本部署返回 401）';
+        this.uploadNote = '对端语音（本示例不接文件服务，只演示本机录制与播放）';
         return;
       }
       const playing = this.voicePlayer.isPlaying(item.voicePath);
@@ -512,7 +512,7 @@ struct Index {
         this.previewImage = item.imageUri;
         return;
       }
-      this.uploadNote = '这张图没有本地副本（对端图片需要服务端文件接口，本部署返回 401）';
+      this.uploadNote = '对端图片（本示例不接文件服务，只演示本机选图与预览）';
       return;
     }
     if (item.kind === 'EX') {
@@ -539,7 +539,7 @@ struct Index {
             Row({ space: 8 }) {
               Text(item.kind === 'VD' ? '[视频]' : '[图片]').fontSize(13)
                 .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
-              Text('对端图片：本地无副本，未上传成功时无法显示')
+              Text('对端图片（本示例不接文件服务）')
                 .fontSize(12).fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
                 .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
             }
@@ -567,7 +567,7 @@ struct Index {
           Text(durationTextOf(item.durationMs)).fontSize(14)
             .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
           if (item.voicePath.length === 0) {
-            Text('对端语音：无本地文件').fontSize(11)
+            Text('对端语音（本示例不接文件服务）').fontSize(11)
               .fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
           }
         }
