@@ -76,3 +76,22 @@ bash examples/harmony/sync-sdk.sh      # ../../src → entry/src/main/ets/tinode
 | Run 报签名错误 | 没做第 3 步（自动签名） |
 | 点「连接」提示 `token 为空` | 第 4 步没填；或勾上页面上的 `anonymous` 先自测 |
 | 改了 SDK 不生效 | 示例里的 SDK 是拷贝副本：跑 `bash sync-sdk.sh` 重新同步 |
+
+### ⚠️ 签名材料不要提交
+
+DevEco 的「自动签名」会把 `certpath / storeFile / keyPassword / storePassword` 写进
+**本目录的 `build-profile.json5`**（这个文件是**仓库里跟踪**的）。所以：
+
+- 你本地跑之前做一次自动签名即可（`git status` 会显示 `build-profile.json5` 被改，**这是预期的**）；
+- **提交/推送前**把这段清回空再提交：
+
+```bash
+git checkout -- examples/harmony/build-profile.json5     # 丢弃本地签名改动（下次 Run 前再签一次）
+# 或者手工把 "signingConfigs" 和 products 里的 "signingConfig" 去掉
+```
+
+- 自检（只检查将要提交的内容，不会因为本地签名而误报）：
+
+```bash
+bash scripts/check-no-secrets.sh
+```
