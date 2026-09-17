@@ -54,13 +54,21 @@ test('acsSummary / acsAbilityLabel：可读文案', () => {
 
 // P3/P5 余项：acc 更新、凭据、getMeta、set desc 的报文形状
 test('acc 更新 / 凭据 / getMeta / set desc 报文形状', async () => {
-  const { buildAccAddCredential, buildAccUpdate, buildGetMetaDesc, buildGetMetaSub, buildSetPublicDesc } =
-    await import('../src/TinodeWire.ts');
+  const { buildAccAddCredential, buildAccUpdate, buildGetMetaDesc, buildGetMetaSub, buildSetPublicDesc,
+    encodeBasicSecret, isValidBasicLogin } = await import('../src/TinodeWire.ts');
+  // basic secret = base64(user:password)（与 Node 的 Buffer 对拍）
+  assert.equal(encodeBasicSecret('alice', 'pw123456'), Buffer.from('alice:pw123456', 'utf8').toString('base64'));
+  assert.equal(encodeBasicSecret('张三', 'pw'), Buffer.from('张三:pw', 'utf8').toString('base64'), '中文用户名按 UTF-8 编码');
+  assert.equal(encodeBasicSecret('a:b', 'pw'), '', '用户名含冒号 → 空串');
+  assert.equal(encodeBasicSecret('', 'pw'), '');
+  assert.equal(isValidBasicLogin('alice'), true);
+  assert.equal(isValidBasicLogin('a:b'), false);
+  assert.equal(isValidBasicLogin('  '), false);
   const update = JSON.parse(buildAccUpdate('7', 'usrAlice', 'basic', 'alice:newPw', '新名字'));
   assert.equal(update.acc.user, 'usrAlice', '更新用 uid，不是 "new"');
   assert.equal(update.acc.login, false);
   assert.equal(update.acc.scheme, 'basic');
-  assert.equal(update.acc.secret, 'alice:newPw');
+  assert.equal(update.acc.secret, 'alice:newPw', 'update 的 secret 由调用方给（低层不改）');
   assert.equal(update.acc.desc.public.fn, '新名字');
   const cred = JSON.parse(buildAccAddCredential('8', 'usrAlice', 'email', 'a@example.com'));
   assert.deepEqual(cred.acc.cred, [{ meth: 'email', val: 'a@example.com' }]);

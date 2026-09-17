@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+### 修复：`basic` 的 secret 必须是 base64
+- `basic` 方案的 `secret` 是 **base64(`用户名:密码`)**（上游 `AuthScheme.encodeBasicToken:49-57`），不是明文 `用户名:密码`；
+  之前的实现发的是明文 → 真机/真实服务端会回 **`400 malformed`**。新增纯函数 `encodeBasicSecret(user, password)` 与
+  `isValidBasicLogin(user)`（用户名不能含 `:`），门面 `registerAccount` / `configurePasswordLogin` 与示例都已改用它；
+- **真机验证**（2026-09-17，dev 服务端 0.25）：`loginScheme:'none'` → `acc{user:"new",login:true,scheme:"basic"}` 注册成功，
+  服务端返回 `uid=usr…` + `token`，随后 `get{topic:"me",what:"sub"}` 拿到会话列表 —— 自举全链路在真实服务端跑通。
+
 ### 权限与账号管理（P5 余项 / P3 余项）
 - `TinodeAcs.ts`（纯逻辑）：`normalizeAccessMode`（`"wr"` → `"RW"`，`N` 显式无权限单独保留）、
   `acsAllows` / `acsCanRead` / `acsCanWrite` / `acsIsOwner`、`parseAcs`（`{given,want,mode}`）、`parseDefacs`（`{auth,anon}`）、

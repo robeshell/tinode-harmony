@@ -20,6 +20,7 @@ import type { TinodeTopicState } from './TinodeTopics.ts';
 import { applyPresence, mergeProfiles, profileFromDesc, profilesFromMeta, sortTopicsByActivity, topicOfProfile } from './TinodeMeta.ts';
 import type { TinodeProfile } from './TinodeMeta.ts';
 import type { TinodeAuth } from './TinodeSession.ts';
+import { encodeBasicSecret, isValidBasicLogin } from './TinodeWire.ts';
 import { ImSession, defaultSessionConfig } from './TinodeSession.ts';
 import type { ImSessionConfig, ImSessionState, ImTransport } from './TinodeSession.ts';
 import type { ImCtrl, ImData, ImInfo, ImMeta, ImNote, ImPres, DelRange } from './TinodeWire.ts';
@@ -290,6 +291,7 @@ export class Tinode {
   registerAccount(user: string, password: string, fn: string = ''): Promise<TinodeAuth> {
     const name = user.trim();
     if (name.length === 0) return Promise.reject('用户名不能为空');
+    if (!isValidBasicLogin(name)) return Promise.reject('用户名不能包含冒号');
     if (password.length < 6) return Promise.reject('密码至少 6 位');
     if (this.session.state() !== 'ready') {
       return Promise.reject('连接尚未就绪：请用 loginScheme 设为 none 启动，等 state() 变成 ready 后再注册');
@@ -297,7 +299,7 @@ export class Tinode {
     return new Promise<TinodeAuth>((resolve: (auth: TinodeAuth) => void, reject: (reason: string) => void) => {
       this.pendingAuth = resolve;
       this.pendingAuthReject = reject;
-      const id = this.session.createAccount('basic', `${name}:${password}`, fn);
+      const id = this.session.createAccount('basic', encodeBasicSecret(name, password), fn);
       if (id.length === 0) {
         this.pendingAuth = null;
         this.pendingAuthReject = null;
@@ -312,7 +314,7 @@ export class Tinode {
    */
   configurePasswordLogin(user: string, password: string): void {
     this.session.setLoginScheme('basic');
-    this.session.setToken(`${user.trim()}:${password}`);
+    this.session.setToken(encodeBasicSecret(user, password));
   }
 
   /** 重新配置登录凭据（换号/重新登录时用；下一次 `start()` 生效）。 */

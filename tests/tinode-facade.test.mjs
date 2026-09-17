@@ -315,7 +315,7 @@ test('P3-min：注册账号（acc user:"new"）成功后拿回 uid/token', async
   assert.equal(accFrame.acc.user, 'new');
   assert.equal(accFrame.acc.login, true);
   assert.equal(accFrame.acc.scheme, 'basic');
-  assert.equal(accFrame.acc.secret, 'alice:pw123456');
+  assert.equal(accFrame.acc.secret, Buffer.from('alice:pw123456', 'utf8').toString('base64'), 'basic secret = base64(user:password)');
   assert.equal(accFrame.acc.desc.public.fn, '爱丽丝');
 
   handlers.onMessage(JSON.stringify({ ctrl: { id: accFrame.acc.id, code: 200, params: { user: 'usrAlice', token: 'tk-1' } } }), 30);
@@ -350,5 +350,5 @@ test('P3-min：configurePasswordLogin 在 start 之前切换 basic scheme', asyn
   handlers.onMessage(JSON.stringify({ ctrl: { id: '1', code: 200, params: { ver: '0.25' } } }), 20);
   const login = sent.map((f) => JSON.parse(f)).find((f) => f.login !== undefined);
   assert.equal(login.login.scheme, 'basic');
-  assert.equal(login.login.secret, 'alice:pw123456');
+  assert.equal(login.login.secret, Buffer.from('alice:pw123456', 'utf8').toString('base64'), 'basic secret = base64(user:password)');
 });

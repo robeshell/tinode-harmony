@@ -28,7 +28,7 @@ import {
   IM_PROBE_PAYLOAD,
   backoffDelayMs, buildDelMessages, buildDelTopic, buildGetHistory, buildHi, buildLeave, buildLogin,
   accFailureText, buildAccAddCredential, buildAccCreate, buildAccUpdate, buildGetHistorySince, buildGetMetaDesc,
-  buildGetMetaSub, buildSetPublicDesc, buildNoteKeyPress, buildNoteRead, buildPub, buildSub,
+  buildGetMetaSub, buildSetPublicDesc, encodeBasicSecret, buildNoteKeyPress, buildNoteRead, buildPub, buildSub,
   ctrlFailureText, ctrlIsFatal, ctrlOk,
   parseServerMessage, parseWsEndpoint
 } from './TinodeWire.ts';
@@ -662,7 +662,7 @@ export class ImSession {
     if (this.currentState !== 'ready' || uid.length === 0) return '';
     const id = this.takeId();
     this.accRequests.add(id);
-    this.transport.send(buildAccUpdate(id, uid, 'basic', `${user.trim()}:${newPassword}`));
+    this.transport.send(buildAccUpdate(id, uid, 'basic', encodeBasicSecret(user, newPassword)));
     return id;
   }
 
