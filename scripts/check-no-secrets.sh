@@ -24,9 +24,9 @@ patterns=(
 fail=0
 for pat in "${patterns[@]}"; do
   if [ "$scope" = "HEAD" ]; then
-    hits=$(git grep -I -n -E "$pat" HEAD -- . ':!scripts/check-no-secrets.sh' 2>/dev/null || true)
+    hits=$(git grep -I -n -e "$pat" HEAD -- . ':!scripts/check-no-secrets.sh' 2>/dev/null || true)
   else
-    hits=$(git diff --cached -U0 | grep -E '^\+' | grep -vE '^\+\+\+' | grep -E "$pat" || true)
+    hits=$(git diff --cached -U0 | grep -E '^\+' | grep -vE '^\+\+\+' | grep -E -e "$pat" || true)
   fi
   if [ -n "$hits" ]; then
     echo "✗ 命中敏感模式 /$pat/："
