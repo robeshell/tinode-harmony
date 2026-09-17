@@ -19,7 +19,7 @@ import {
   ImSessionConfig, ImSessionState, MemoryTinodeStorage, StorageCacheStats, Tinode, TinodeAuth, TinodeHooks,
   TinodeMessage, TinodeOptions, TinodeProfile, TinodeSubscribeOptions, TinodeTopic, TinodeTopicState,
   acsSummary, attachmentDrafty,
-  cacheKeyOf, defaultSessionConfig, DelRange, draftyPlain, draftySegments, draftyWithStyle, parseDraftyJson, planChunks,
+  cacheKeyOf, defaultSessionConfig, DelRange, draftyLink, draftyWithEntity, draftyPlain, draftySegments, draftyWithStyle, parseDraftyJson, planChunks,
   progressPercent, validateAttachment
 } from '../tinode/Index.ts';
 import { TinodeSocket } from '../tinode/Socket.ets';
@@ -214,6 +214,39 @@ export class DemoClient {
     const drafty = attachmentDrafty({ name: name, mime: mime, size: size }, { ref: cacheKeyOf(name, mime) }, name);
     client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
     this.listener.onLog(`附件消息已发送（本地 ref，未真正上传）`);
+  }
+
+  /** 引用消息（`QQ` 实体 + 被引序号放在 data.val）。 */
+  sendQuote(text: string, quotedSeq: number): void {
+    const client = this.tinode;
+    if (client === null || this.currentTopic.length === 0) return;
+    const drafty = draftyWithEntity(draftyPlain(text), 0, text.length, 'QQ', { val: `seq:${quotedSeq}` });
+    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    this.listener.onLog(`引用 seq=${quotedSeq} 并发送`);
+  }
+
+  /** 位置（demo 用链接形态承载 `geo:lat,lng`；真实产品用自定义 head 承载坐标）。 */
+  sendLocation(label: string, lat: number, lng: number): void {
+    const client = this.tinode;
+    if (client === null || this.currentTopic.length === 0) return;
+    const text = `${label}`;
+    const drafty = draftyLink(draftyPlain(text), 0, text.length, `geo:${lat},${lng}`);
+    client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+    this.listener.onLog(`位置已发送 ${label}`);
+  }
+
+  /** 表情（表情在 Tinode 里也是消息内容；这里直接发 emoji 文本）。 */
+  sendSticker(emoji: string): void {
+    const client = this.tinode;
+    if (client === null || this.currentTopic.length === 0) return;
+    client.publish(this.currentTopic, draftyPlain(emoji), { mime: 'text/x-drafty' });
+    this.listener.onLog(`表情已发送 ${emoji}`);
+  }
+
+  /** 存储缓存统计（P4：`CachedTinodeStorage.stats()`）。 */
+  cacheLine(): string {
+    const stats = this.storage.stats();
+    return `缓存 命中=${stats.hits} 未命中=${stats.misses} 槽位=${stats.entries}`;
   }
 
   /** 已读 / 正在输入 / 撤回 / 权限摘要 / 缓存统计。 */

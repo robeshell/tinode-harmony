@@ -55,6 +55,7 @@ struct Index {
   @Local subscribedCount: number = 0;
   @Local topicInput: string = '';
   @Local myUid: string = '';
+  @Local cacheLine: string = '';
   private client: DemoClient | null = null;
 
   aboutToAppear(): void {
@@ -134,6 +135,7 @@ struct Index {
           if (c === null || this.topicInput.length === 0) return;
           c.openTopic(this.topicInput);
           this.currentTopic = this.topicInput;
+          this.cacheLine = c.cacheLine();
           this.view = 2;
         })
         Button('发给自己').onClick(() => {
@@ -144,6 +146,7 @@ struct Index {
           if (uid.length === 0) { this.append('还没有 uid：先注册或登录'); return; }
           c.openTopic(uid);
           this.currentTopic = uid;
+          this.cacheLine = c.cacheLine();
           this.view = 2;
         })
       }
@@ -167,6 +170,7 @@ struct Index {
               c.openTopic(item.topic);
               this.currentTopic = item.topic;
               this.subscribedCount = c.topics().length;
+              this.cacheLine = c.cacheLine();
               this.view = 2;
             }
           })
@@ -188,11 +192,18 @@ struct Index {
           if (c !== null && this.messages.length > 0) c.markRead(this.messages[this.messages.length - 1].seq);
         })
       }
-      Row({ space: 8 }) {
+      Row({ space: 6 }) {
         Button('图片').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendLocalFile('photo.jpg', 'image/jpeg', 240 * 1024); })
         Button('文件').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendLocalFile('report.pdf', 'application/pdf', 3 * 1024 * 1024); })
-        Text(this.uploadNote.length > 0 ? `${this.uploadNote}（${this.uploadPercent}%）` : '').fontSize(11)
+        Button('位置').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendLocation('公司', 31.86, 117.28); })
+        Button('表情').onClick(() => { const c = this.clientOrNull(); if (c !== null) c.sendSticker('😀'); })
+        Button('引用末条').onClick(() => {
+          const c = this.clientOrNull();
+          if (c !== null && this.messages.length > 0) c.sendQuote('引用一下', this.messages[this.messages.length - 1].seq);
+        })
       }
+      Text(this.uploadNote.length > 0 ? `${this.uploadNote}（${this.uploadPercent}%）` : '').fontSize(11)
+      Text(this.cacheLine).fontSize(10)
       List({ space: 4 }) {
         ForEach(this.messages, (item: DemoMessage) => {
           ListItem() {
