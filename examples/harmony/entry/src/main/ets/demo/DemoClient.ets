@@ -19,7 +19,7 @@ import {
   ImSessionConfig, ImSessionState, MemoryTinodeStorage, StorageCacheStats, Tinode, TinodeAuth, TinodeHooks,
   TinodeMessage, TinodeOptions, TinodeProfile, TinodeSubscribeOptions, TinodeTopic, TinodeTopicState,
   acsSummary, attachmentDrafty, attachmentOfDrafty,
-  cacheKeyOf, defaultSessionConfig, DelRange, draftyLink, draftyWithEntity, attachmentUploadUrl, uploadedRefOf, draftyPlain, draftySegments, draftyWithStyle, parseDraftyJson, planChunks,
+  cacheKeyOf, defaultSessionConfig, DelRange, draftyEntities, draftyLink, draftyWithEntity, attachmentUploadUrl, uploadedRefOf, draftyPlain, draftySegments, draftyWithStyle, parseDraftyJson, planChunks,
   progressPercent, validateAttachment
 } from '../tinode/Index.ts';
 import { TinodeSocket } from '../tinode/Socket.ets';
@@ -37,6 +37,13 @@ function guessKindOf(mime: string): string {
   return 'EX';
 }
 
+
+/** 位置（解析自 `LN` 实体的 `geo:` 链接）。 */
+export interface DemoPlace {
+  label: string;
+  lat: number;
+  lng: number;
+}
 
 /** 页面展示用的一条消息（把线路消息 + 富文本片段合在一起）。 */
 export interface DemoMessage {
@@ -60,6 +67,10 @@ export interface DemoMessage {
   imageUri: string;
   /** 语音消息的**本地可播放路径**（沙箱 WAV）；没有则点击时如实提示。 */
   voicePath: string;
+  /** 位置消息：地址与经纬度（解析自 Drafty 实体；不是位置消息时为 0/空）。 */
+  placeLabel: string;
+  placeLat: number;
+  placeLng: number;
 }
 
 /** 页面展示用的一个会话。 */
@@ -453,9 +464,16 @@ export class DemoClient {
     const client = this.tinode;
     if (client === null || this.currentTopic.length === 0) return;
     const text = `${label}`;
-    const drafty = draftyLink(draftyPlain(text), 0, text.length, `geo:${lat},${lng}`);
-    this.whenSubscribed(() => client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' }));
-    this.listener.onLog(`位置已发送 ${label}`);
+    const drafty = draftyWithEntity(draftyPlain(text), 0, text.length, 'LN',
+      { url: `geo:${lat},${lng}`, title: label, val: `${lat},${lng}` });
+    const localId = `local-${Date.now()}`;
+    this.appendLocalAttachment(localId, this.currentTopic, text, draftySegments(drafty), 'LN', 0, 0, '', '', lat, lng);
+    this.whenSubscribed(() => {
+      const frameId = client.publish(this.currentTopic, drafty, { mime: 'text/x-drafty' });
+      if (frameId.length > 0) this.pendingPub.set(frameId, localId);
+      else this.markStatus(localId, 'failed');
+    });
+    this.listener.onLog(`位置已发送 ${label}（${lat},${lng}）`);
   }
 
   /** 表情（表情在 Tinode 里也是消息内容；这里直接发 emoji 文本）。 */
@@ -522,6 +540,42 @@ export class DemoClient {
     return localLabel.length > 0 && localLabel === incomingLabel;
   }
 
+  /**
+   * 消息类型：取 Drafty 里的**第一个实体类型**（`IM/AU/VD/EX/LN/QQ…`），没有实体算 `text`。
+   * 注意不能用 `draftySegments` 判类型 —— 它按设计会跳过 `LN/MN/HT`（链接/@/话题不占渲染片段）。
+   */
+  private kindOfDrafty(drafty: Drafty | null): string {
+    const entities = draftyEntities(drafty);
+    return entities.length > 0 ? entities[0].tp : 'text';
+  }
+
+  /** 位置坐标（解析自 `LN` 实体的 `geo:lat,lng`）。 */
+  private static parseGeo(url: string): DemoPlace | null {
+    const text = url.startsWith('geo:') ? url.slice(4) : '';
+    if (text.length === 0) return null;
+    const parts = text.split(',');
+    if (parts.length < 2) return null;
+    const lat = Number.parseFloat(parts[0]);
+    const lng = Number.parseFloat(parts[1]);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+    return { label: '', lat: lat, lng: lng };
+  }
+
+  /** 从消息内容里解析位置（不是位置消息返回 null）。 */
+  private placeOfDrafty(drafty: Drafty | null): DemoPlace | null {
+    if (drafty === null || drafty.ent === undefined) return null;
+    for (let i = 0; i < drafty.ent.length; i++) {
+      const entity = drafty.ent[i];
+      if (entity.tp !== 'LN' || entity.data === undefined) continue;
+      const url = typeof entity.data.url === 'string' ? entity.data.url : '';
+      const geo = DemoClient.parseGeo(url);
+      if (geo === null) continue;
+      const title = entity.data.title !== undefined && entity.data.title.length > 0 ? entity.data.title : drafty.txt;
+      return { label: title, lat: geo.lat, lng: geo.lng };
+    }
+    return null;
+  }
+
   /** 从消息内容里取实体 ref（图片消息用于反查本地沙箱路径）。 */
   private refOfDrafty(drafty: Drafty | null): string {
     if (drafty === null || drafty.ent === undefined) return '';
@@ -577,8 +631,9 @@ export class DemoClient {
     const drafty = message.content;
     const segments = draftySegments(drafty);
     const attachment: AttachmentMeta | null = attachmentOfDrafty(drafty);
-    const kind = segments.length > 0 && segments[0].entity !== null ? segments[0].entity.tp : 'text';
+    const kind = this.kindOfDrafty(drafty);
     const ref = attachment === null ? '' : this.refOfDrafty(drafty);
+    const place = this.placeOfDrafty(drafty);
     const localImage = ref.length > 0 && this.imagePathByRef.has(ref) ? this.imagePathByRef.get(ref) as string : '';
     const item: DemoMessage = {
       id: message.id, topic: message.topic, seq: message.seq, isMine: message.isMine, ts: message.ts,
@@ -588,7 +643,10 @@ export class DemoClient {
       fileSize: attachment === null ? 0 : attachment.size,
       durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration,
       imageUri: localImage,
-      voicePath: ref.length > 0 && this.voicePathByRef.has(ref) ? this.voicePathByRef.get(ref) as string : ''
+      voicePath: ref.length > 0 && this.voicePathByRef.has(ref) ? this.voicePathByRef.get(ref) as string : '',
+      placeLabel: place === null ? '' : place.label,
+      placeLat: place === null ? 0 : place.lat,
+      placeLng: place === null ? 0 : place.lng
     };
     let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
@@ -628,7 +686,8 @@ export class DemoClient {
     bucket.push({
       id: localId, topic: topic, seq: -1, isMine: true, ts: now, text: text, segments: segments, kind: kind,
       showTime: false, timeText: timeLabelOf(now, now), status: status,
-      fileName: '', fileSize: 0, durationMs: 0, imageUri: '', voicePath: ''
+      fileName: '', fileSize: 0, durationMs: 0, imageUri: '', voicePath: '',
+      placeLabel: '', placeLat: 0, placeLng: 0
     });
     this.statusByLocalId.set(localId, status);
     this.decorate(bucket);
@@ -637,7 +696,8 @@ export class DemoClient {
 
   /** 本地先落一条附件消息（发送中）。 */
   private appendLocalAttachment(localId: string, topic: string, text: string, segments: DraftySegment[],
-    kind: string, size: number, durationMs: number, imageUri: string, voicePath: string = ''): void {
+    kind: string, size: number, durationMs: number, imageUri: string, voicePath: string = '',
+    placeLat: number = 0, placeLng: number = 0): void {
     let bucket = this.messagesByTopic.get(topic);
     if (bucket === undefined) {
       bucket = [];
@@ -648,7 +708,8 @@ export class DemoClient {
       id: localId, topic: topic, seq: -1, isMine: true, ts: now, text: text, segments: segments, kind: kind,
       showTime: false, timeText: timeLabelOf(now, now), status: 'sending',
       fileName: kind === 'EX' ? text : '', fileSize: size, durationMs: durationMs, imageUri: imageUri,
-      voicePath: voicePath
+      voicePath: voicePath,
+      placeLabel: kind === 'LN' ? text : '', placeLat: kind === 'LN' ? placeLat : 0, placeLng: kind === 'LN' ? placeLng : 0
     });
     this.statusByLocalId.set(localId, 'sending');
     this.decorate(bucket);
@@ -715,9 +776,10 @@ export class DemoClient {
     let text = '';
     if (drafty !== null) text = drafty.txt;
     const attachment: AttachmentMeta | null = attachmentOfDrafty(drafty);
-    const receivedKind = segments.length > 0 && segments[0].entity !== null ? segments[0].entity.tp : 'text';
+    const receivedKind = this.kindOfDrafty(drafty);
     // 自己发的图片会被服务端**回显**成 data 报文：这里用实体 ref 反查本地沙箱副本，才能显示缩略图
     const receivedRef = this.refOfDrafty(drafty);
+    const placeInfo = this.placeOfDrafty(drafty);
     const receivedLocalImage = receivedRef.length > 0 && this.imagePathByRef.has(receivedRef)
       ? this.imagePathByRef.get(receivedRef) as string : '';
     const message: DemoMessage = {
@@ -735,7 +797,10 @@ export class DemoClient {
       durationMs: attachment === null || attachment.duration === undefined ? 0 : attachment.duration,
       imageUri: receivedLocalImage,
       voicePath: receivedRef.length > 0 && this.voicePathByRef.has(receivedRef)
-        ? this.voicePathByRef.get(receivedRef) as string : ''
+        ? this.voicePathByRef.get(receivedRef) as string : '',
+      placeLabel: placeInfo === null ? '' : placeInfo.label,
+      placeLat: placeInfo === null ? 0 : placeInfo.lat,
+      placeLng: placeInfo === null ? 0 : placeInfo.lng
     };
     let bucket = this.messagesByTopic.get(message.topic);
     if (bucket === undefined) {
@@ -751,6 +816,10 @@ export class DemoClient {
           const previous = bucket[i];
           message.imageUri = message.imageUri.length > 0 ? message.imageUri : previous.imageUri;
           message.voicePath = message.voicePath.length > 0 ? message.voicePath : previous.voicePath;
+          // 位置：服务端可能裁掉实体里的自定义字段，本地解析出来的坐标要保留
+          message.placeLabel = message.placeLabel.length > 0 ? message.placeLabel : previous.placeLabel;
+          message.placeLat = message.placeLat !== 0 ? message.placeLat : previous.placeLat;
+          message.placeLng = message.placeLng !== 0 ? message.placeLng : previous.placeLng;
           if (message.segments.length === 0) message.segments = previous.segments;
           if (message.text.length === 0) message.text = previous.text;
           message.kind = previous.kind;

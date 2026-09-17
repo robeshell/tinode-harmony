@@ -25,6 +25,14 @@ interface CapabilityGroup {
   rows: CapabilityRow[];
 }
 
+/** 表情面板（demo 用的静态表情表；真实产品会从服务端/资源包加载）。 */
+const EMOJI_LIST: string[] = [
+  '😀', '😄', '😁', '😆', '😅', '😂', '🙂', '😉',
+  '😊', '😍', '😘', '😜', '🤔', '😐', '😴', '😭',
+  '😡', '👍', '👎', '👌', '🙏', '👏', '💪', '🎉',
+  '❤️', '🔥', '⭐', '✅', '❌', '📍', '📄', '🎤'
+];
+
 const CAPABILITY_GROUPS: CapabilityGroup[] = [
   {
     title: '连接与生命周期',
@@ -98,6 +106,8 @@ struct Index {
   @Local bold: boolean = false;
   @Local italic: boolean = false;
   @Local showAttach: boolean = false;
+  @Local showEmoji: boolean = false;
+  private listScroller: Scroller = new Scroller();
   @Local voiceMode: boolean = false;
   @Local recording: boolean = false;
   @Local voiceLevel: number = 0;
@@ -139,7 +149,7 @@ struct Index {
       },
       onLog: (line: string) => this.append(line),
       onConversations: (list: DemoConversation[]) => { this.conversations = list; },
-      onMessages: (list: DemoMessage[]) => { this.messages = list; },
+      onMessages: (list: DemoMessage[]) => { this.messages = list; this.scrollToBottom(); },
       onUploadProgress: (percent: number, note: string) => { this.uploadPercent = percent; this.uploadNote = note; }
     };
     this.client = new DemoClient(listener);
@@ -150,6 +160,17 @@ struct Index {
     this.recorder.release();
     const client = this.client;
     if (client !== null) client.disconnect();
+  }
+
+  /** 滚到最新一条（发送/收到/打开会话后调用；用户往上翻历史时不打扰）。 */
+  private scrollToBottom(): void {
+    setTimeout(() => {
+      try {
+        this.listScroller.scrollEdge(Edge.Bottom);
+      } catch (error) {
+        // 列表还没挂载时忽略
+      }
+    }, 30);
   }
 
   private append(line: string): void {
@@ -187,6 +208,7 @@ struct Index {
     this.peerSeen = seenMs > 0 ? `最后在线 ${timeLabelOf(seenMs, Date.now())}` : '';
     this.cacheLine = client.cacheLine();
     this.view = 2;
+    this.scrollToBottom();
   }
 
   private pickAndSendImage(): void {
@@ -515,6 +537,10 @@ struct Index {
       this.uploadNote = '对端图片（本示例不接文件服务，只演示本机选图与预览）';
       return;
     }
+    if (item.kind === 'LN' && (item.placeLat !== 0 || item.placeLng !== 0)) {
+      this.uploadNote = `位置：${item.placeLabel}（${item.placeLat}, ${item.placeLng}）—— 示例不拉地图`;
+      return;
+    }
     if (item.kind === 'EX') {
       this.uploadNote = `文件：${item.fileName.length > 0 ? item.fileName : item.text}（${sizeTextOf(item.fileSize)}）—— 示例不做打开/下载`;
       return;
@@ -571,6 +597,28 @@ struct Index {
               .fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
           }
         }
+      } else if (item.kind === 'LN' && (item.placeLat !== 0 || item.placeLng !== 0)) {
+        // 位置卡片（照 Android 基线 LocationBubble：上部浅蓝地图区 + 红色定位图标 + 地址与坐标）
+        Column({ space: 0 }) {
+          Stack() {
+            Text('📍').fontSize(24)
+          }
+          .width('100%').height(80)
+          .backgroundColor('#E8F0FE')
+          .borderRadius({ topLeft: DemoTheme.bubbleRadius, topRight: DemoTheme.bubbleRadius })
+          .alignContent(Alignment.Center)
+          Column({ space: 2 }) {
+            Text(item.placeLabel.length > 0 ? item.placeLabel : '位置').fontSize(14)
+              .fontWeight(FontWeight.Medium)
+              .fontColor(item.isMine ? Color.White : DemoTheme.textPrimary)
+              .maxLines(2).textOverflow({ overflow: TextOverflow.Ellipsis })
+            Text(`${item.placeLat.toFixed(5)}, ${item.placeLng.toFixed(5)}`).fontSize(11)
+              .fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
+          }
+          .width('100%').padding({ left: 10, right: 10, top: 6, bottom: 8 })
+          .alignItems(HorizontalAlign.Start)
+        }
+        .width(200)
       } else if (item.kind === 'QQ') {
         Column({ space: 4 }) {
           Text('引用').fontSize(10).fontColor(item.isMine ? '#E6F2FF' : DemoTheme.textHint)
@@ -607,7 +655,9 @@ struct Index {
         Column({ space: 2 }) {
           Row() {
             Column() { this.messageContent(item) }
-              .padding({ left: DemoTheme.bubblePaddingH, right: DemoTheme.bubblePaddingH, top: DemoTheme.bubblePaddingV, bottom: DemoTheme.bubblePaddingV })
+              .padding(item.kind === 'LN' && (item.placeLat !== 0 || item.placeLng !== 0)
+                ? 0
+                : { left: DemoTheme.bubblePaddingH, right: DemoTheme.bubblePaddingH, top: DemoTheme.bubblePaddingV, bottom: DemoTheme.bubblePaddingV })
               .constraintSize({ maxWidth: DemoTheme.bubbleMaxWidth })
               .backgroundColor(item.isMine ? DemoTheme.bubbleMine : DemoTheme.bubblePeer)
               .borderRadius(DemoTheme.bubbleRadius)
@@ -625,6 +675,33 @@ struct Index {
         }.layoutWeight(1)
       }.width('100%').alignItems(VerticalAlign.Top)
     }.width('100%')
+  }
+
+  /** 表情面板：点一下插入输入框（demo 静态表情表，真实产品从服务端/资源包取）。 */
+  @Builder
+  emojiPanel() {
+    Column({ space: 10 }) {
+      Row() {
+        Text('表情').fontSize(15).fontColor(DemoTheme.textSecondary).layoutWeight(1)
+        Text('收起').fontSize(13).fontColor(DemoTheme.brand)
+          .onClick(() => { this.showEmoji = false; })
+      }.width('100%')
+      Grid() {
+        ForEach(EMOJI_LIST, (emoji: string) => {
+          GridItem() {
+            Text(emoji).fontSize(26)
+          }
+          .onClick(() => {
+            this.draft = this.draft + emoji;
+            this.uploadNote = `已插入 ${emoji}`;
+          })
+        }, (emoji: string) => emoji)
+      }
+      .columnsTemplate('1fr 1fr 1fr 1fr 1fr 1fr 1fr 1fr')
+      .rowsGap(8).columnsGap(8)
+      .height(200)
+    }
+    .width('100%').padding(12).backgroundColor(Color.White)
   }
 
   @Builder
@@ -646,13 +723,9 @@ struct Index {
           })
       }.width('100%')
       Row({ space: 10 }) {
-        Button('表情').layoutWeight(1).height(40).borderRadius(10)
+        Button('表情面板').layoutWeight(1).height(40).borderRadius(10)
           .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(13)
-          .onClick(() => {
-            this.showAttach = false;
-            const client = this.clientOrNull();
-            if (client !== null) client.sendSticker('😀');
-          })
+          .onClick(() => { this.showAttach = false; this.showEmoji = true; })
         Button('引用末条').layoutWeight(1).height(40).borderRadius(10)
           .backgroundColor(DemoTheme.fieldFill).fontColor(DemoTheme.textPrimary).fontSize(13)
           .onClick(() => {
@@ -710,7 +783,7 @@ struct Index {
           Text('发一条试试；也可以点「加号」发图片/文件/位置/表情').fontSize(12).fontColor(DemoTheme.textHint)
         }.layoutWeight(1).justifyContent(FlexAlign.Center).width('100%')
       } else {
-        List({ space: 2 }) {
+        List({ space: 2, scroller: this.listScroller }) {
           ForEach(this.messages, (item: DemoMessage) => {
             ListItem() { this.messageRow(item) }
           }, (item: DemoMessage) => item.id)
@@ -719,6 +792,7 @@ struct Index {
       }
 
       if (this.showAttach) { this.attachPanel() }
+      if (this.showEmoji) { this.emojiPanel() }
 
       Row({ space: 8 }) {
         Text(this.voiceMode ? '⌨️' : '🎤').fontSize(20)
@@ -743,8 +817,11 @@ struct Index {
           Text('I').fontSize(15).fontStyle(FontStyle.Italic)
             .fontColor(this.italic ? DemoTheme.brand : DemoTheme.textSecondary)
             .onClick(() => { this.italic = !this.italic; })
+          Text('😊').fontSize(19)
+            .fontColor(this.showEmoji ? DemoTheme.brand : DemoTheme.textSecondary)
+            .onClick(() => { this.showEmoji = !this.showEmoji; this.showAttach = false; })
           Text('＋').fontSize(22).fontColor(DemoTheme.textSecondary)
-            .onClick(() => { this.showAttach = !this.showAttach; })
+            .onClick(() => { this.showAttach = !this.showAttach; this.showEmoji = false; })
           Button('发送').height(40).borderRadius(20).fontSize(14)
             .backgroundColor(this.draft.length > 0 ? DemoTheme.brand : DemoTheme.border)
             .enabled(this.draft.length > 0)
